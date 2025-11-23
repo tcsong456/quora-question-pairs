@@ -16,12 +16,13 @@ class BuildVocab:
         self.test_data = test
         self.words_index = {}
         self.words_index['<pad>'] = 0
+        self.words_index['<unk>'] = 1
         if not os.path.exists('artifacts'):
             raise FileNotFoundError('artifacts folder must exist, create it first')
         self.save_path = 'artifacts/words_index.json'
     
     def vocab(self):
-        ind = 1
+        ind = 2
         nlp = spacy.blank("en") 
         tokenizer = nlp.tokenizer
         columns = ['question1', 'question2']
