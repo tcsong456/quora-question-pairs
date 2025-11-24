@@ -11,6 +11,7 @@ class BiMPM(nn.Module):
                  hidden_size,
                  words_index_dict,
                  mul_dim,
+                 max_len,
                  use_multi_head=False):
         super().__init__()
         vec_model = load_facebook_model('artifacts/cc.en.300.bin')
@@ -31,6 +32,7 @@ class BiMPM(nn.Module):
         self.hidden_size = hidden_size
         self.mul_dim = mul_dim
         self.use_multi_head = use_multi_head
+        self.max_len = max_len
         
         self.bi_lstm = nn.LSTM(emb_dim,
                                hidden_size,
@@ -49,6 +51,9 @@ class BiMPM(nn.Module):
             self.additive_linear = nn.Linear(hidden_size, 100)
             self.additive_dot_weights = nn.Parameter(torch.empty(1, 100))
             nn.init.xavier_uniform_(self.additive_dot_weights)
+            self.concat_linear = nn.Linear(2*hidden_size, 100)
+            self.concat_dot_weights = nn.Parameter(torch.empty(1, 100))
+            nn.init.xavier_uniform_(self.concat_dot_weights)
     
     def forward(self, batch):
         matches = []
@@ -65,17 +70,16 @@ class BiMPM(nn.Module):
         q1_packed_output, _ = self.bi_lstm(q1_input)
         q2_packed_output, _ = self.bi_lstm(q2_input)
         
-        q1_output, _ = pad_packed_sequence(q1_packed_output)
-        q2_output,_ = pad_packed_sequence(q2_packed_output)
-        q1_output = q1_output.transpose(0, 1)
-        q2_output = q2_output.transpose(0, 1)
+        q1_output, _ = pad_packed_sequence(q1_packed_output, batch_first=True, total_length=self.max_len)
+        q2_output,_ = pad_packed_sequence(q2_packed_output, batch_first=True, total_length=self.max_len)
+        # q1_output = q1_output.transpose(0, 1)
+        # q2_output = q2_output.transpose(0, 1)
         q1_fw, q1_bw = q1_output[:, :, :self.hidden_size], q1_output[:, :, self.hidden_size:]
         q2_fw, q2_bw = q2_output[:, :, :self.hidden_size], q2_output[:, :, self.hidden_size:]
         q1_fw, q1_bw = self.dropout(q1_fw), self.dropout(q1_bw)
         q2_fw, q2_bw = self.dropout(q2_fw), self.dropout(q2_bw)
         
         max_len = q1_fw.shape[1]
-        self.max_len = max_len
         actual_q1_len = q1_lengths[:, None]
         actual_q2_len = q2_lengths[:, None]
         ref_len = torch.arange(max_len)[None]
@@ -102,17 +106,36 @@ class BiMPM(nn.Module):
         matches.append(fw_pool_matching)
         matches.append(bw_pool_matching)
         
-        fw_cosine_similarity_attn = self._cosine_attn(q1_fw, q2_fw, mask)
-        bw_cosine_similarity_attn = self._cosine_attn(q1_bw, q2_bw, mask)
+        fw_cosine_attn = self._cosine_attn(q1_fw, q2_fw, mask)
+        bw_cosine_attn = self._cosine_attn(q1_bw, q2_bw, mask)
+        fw_cosine_sim = self._weight_sent_by_attn(q2_fw, fw_cosine_attn)
+        bw_cosine_sim = self._weight_sent_by_attn(q2_bw, bw_cosine_attn)
+        fw_attentive_matching = self._attentive_matching(q1_fw, fw_cosine_sim)
+        bw_attentive_matching = self._attentive_matching(q1_bw, bw_cosine_sim)
         
         if self.use_multi_head:
             fw_multiplicative_attn = self._multiplicative_attn(q1_fw, q2_fw, q2_lengths, mask)
             bw_multiplicative_attn = self._multiplicative_attn(q1_bw, q2_bw, q2_lengths, mask)
+            fw_multiplicative_sim = self._weight_sent_by_attn(q2_fw, fw_multiplicative_attn)
+            bw_multiplicative_sim = self._weight_sent_by_attn(q2_bw, bw_multiplicative_attn)
+            fw_multiplicative_matching = self._attentive_matching(q1_fw, fw_multiplicative_sim)
+            bw_amultiplicative_matching = self._attentive_matching(q1_bw, bw_multiplicative_sim)
             
             fw_additive_attn = self._additive_attn(q1_fw, q2_fw, q2_lengths, mask)
             bw_additive_attn = self._additive_attn(q1_bw, q2_bw, q2_lengths, mask)
+            fw_additive_sim = self._weight_sent_by_attn(q2_fw, fw_additive_attn)
+            bw_additive_sim = self._weight_sent_by_attn(q2_bw, bw_additive_attn)
+            fw_additive_matching = self._attentive_matching(q1_fw, fw_additive_sim)
+            bw_aadditive_matching = self._attentive_matching(q1_bw, bw_additive_sim)
+            
+            fw_concat_attn = self._concat_attn(q1_fw, q2_fw, q2_lengths, mask)
+            bw_concat_attn = self._concat_attn(q1_bw, q2_bw, q2_lengths, mask)
+            fw_concat_sim = self._weight_sent_by_attn(q2_fw, fw_concat_attn)
+            bw_concat_sim = self._weight_sent_by_attn(q2_bw, bw_concat_attn)
+            fw_concat_matching = self._attentive_matching(q1_fw, fw_concat_sim)
+            bw_aconcat_matching = self._attentive_matching(q1_bw, bw_concat_sim)
         
-            return fw_additive_attn, bw_additive_attn
+            return fw_concat_attn, bw_concat_attn
         else:
             return None, None
     
@@ -168,8 +191,21 @@ class BiMPM(nn.Module):
         attn = self._post_attn_process(logits, x2_len, pad_mask)
         return attn
     
+    def _concat_attn(self, x1, x2, x2_len, pad_mask):
+        x1 = torch.tile(x1[:, :, None], (1, 1, self.max_len, 1))
+        x2 = torch.tile(x2[:, None], (1, self.max_len, 1, 1))
+        x = torch.concat([x1 ,x2], dim=-1)
+        x = self.concat_linear(x)
+        logits = torch.sum(x * self.concat_dot_weights, dim=-1)
+        attn = self._post_attn_process(logits, x2_len, pad_mask)
+        return attn
     
-      
+    def _weight_sent_by_attn(self, x, attn_mat):
+        x = x[:, None]
+        attn_mat = attn_mat[:, :, :, None]
+        x = torch.sum(x * attn_mat, dim=2)
+        return x
+    
     def _full_matching(self, x1, x2):
         q1_rep = self._mul_weights(x1, self.full_matching_weights, dim='2D')
         q2_rep = self._mul_weights(x2, self.full_matching_weights, dim='1D')
@@ -188,10 +224,40 @@ class BiMPM(nn.Module):
         word_to_word_perspective = self._cosine_similarity(q1_rep, q2_rep)
         word_to_word_perspective = torch.mean(word_to_word_perspective, dim=2)
         return word_to_word_perspective
+    
+    def _attentive_matching(self, x, m):
+        x = self._mul_weights(x, self.attentive_matching_weights, dim='2D')
+        m = self._mul_weights(m, self.attentive_matching_weights, dim='2D')
+        word_to_word_weight_perpective = self._cosine_similarity(x, m)
+        word_to_word_weight_perpective = word_to_word_weight_perpective.reshape(self.batch_size, -1, self.mul_dim)
+        return word_to_word_weight_perpective
 
 #%%
+import pandas as pd
+from utils.build_vocab import BuildVocab
+from utils.dataset import QQPDataset
+from torch.utils.data import DataLoader
+# bv = BuildVocab('data/train.csv',
+#                 'data/test.csv')
+# words_index = bv.load()
+
+# train = pd.read_csv('data/train.csv')
+# dataset = QQPDataset(
+#     data=train,
+#     words_index=words_index,
+#     max_len=40,
+#     mode='train'
+#   )
+# dl = DataLoader(dataset,
+#                 shuffle=True,
+#                 batch_size=128
+#                 )
+# for batch in dl:
+#     break
+
 model = BiMPM(emb_dim=300,
               hidden_size=150,
+              max_len=40,
               words_index_dict=words_index,
               mul_dim=20,
               use_multi_head=True)
@@ -201,8 +267,4 @@ a, b = model(batch)
 #%%
 # q1_len = batch[3]
 # q2_len = batch[4]
-x1 = torch.rand(64, 20, 1, 100)
-x2 = torch.rand(64, 1, 20, 100)
-x1 = torch.tile(x1, (1,1,20,1))
-x2 = torch.tile(x2, (1,20,1,1))
-torch.concat([x1, x2], dim=-1).shape
+b

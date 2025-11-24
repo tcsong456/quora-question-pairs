@@ -47,7 +47,7 @@ class QQPDataset(Dataset):
         if self.mode != 'test':
             id = row['id']
             y = row['is_duplicate']
-            return id, q1_index, q2_index, y, q1_len, q2_len
+            return id, q1_index, q2_index, q1_len, q2_len, y
         else:
             id = row['test_id']
             return id, q1_index, q2_index, q1_len, q2_len
