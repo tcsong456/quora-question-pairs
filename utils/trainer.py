@@ -138,7 +138,7 @@ class Trainer:
 if __name__ == '__main__':
     # bv = BuildVocab('data/train.csv',
     #                 'data/test.csv')
-    # words_index = bv.load()
+    # words_index = bv.load_dict()
     # vec_model = load_facebook_model('artifacts/cc.en.300.bin')
     trainer = Trainer(
         vocab=bv,

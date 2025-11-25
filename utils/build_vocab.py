@@ -1,5 +1,6 @@
 import os
 import json
+import pickle
 import spacy
 import warnings
 import pandas as pd
@@ -9,7 +10,8 @@ from tqdm import tqdm
 class BuildVocab:
     def __init__(self,
                  train_path,
-                 test_path):
+                 test_path,
+                 max_len=30):
         train = pd.read_csv(train_path)
         test = pd.read_csv(test_path)
         self.train_data = train
@@ -20,12 +22,16 @@ class BuildVocab:
         if not os.path.exists('artifacts'):
             raise FileNotFoundError('artifacts folder must exist, create it first')
         self.save_path = 'artifacts/words_index.json'
+        self.vocab_exe = False
+        self.max_len = max_len
     
     def vocab(self):
         ind = 2
         nlp = spacy.blank("en") 
         tokenizer = nlp.tokenizer
+        self.tokenizer = tokenizer
         columns = ['question1', 'question2']
+        self.columns = columns
         questions = np.array([])
         
         for q in columns:
@@ -42,10 +48,27 @@ class BuildVocab:
                 if w not in self.words_index:
                     self.words_index[w] = ind
                     ind += 1
+        self.vocab_exe = True
     
-    def convert_sent_to_idx(self):
-        for col in ['question1', 'question2']:
-          
+    def convert_sent_to_index(self):
+        if not self.vocab_exe:
+            raise ValueError('please run vocab method first to build the vocabulary')
+        
+        unk_idx = self.words_index['<unk>']
+        for q in self.columns:
+            for i, d in enumerate([self.train_data, self.test_data]):
+                sentences = []
+                cur_data = 'train' if i == 0 else 'test'
+                tq_ts = tqdm(d[q].values, total=d.shape[0], desc=f'converting sentence to word index for {cur_data} {q}')
+                for sent in tq_ts:
+                    tokens = self.tokenizer(sent)
+                    sent_index = [self.words_index.get(token.text.lower(), unk_idx) for token in tokens]
+                    sent_index = sent_index[:self.max_len]
+                    if len(sent_index) < self.max_len:
+                        sent_index += [self.words_index['<pad>']] * (self.max_len - len(sent_index))
+                    sentences.append(sent_index)
+                sentences = np.array(sentences)
+                np.save(f'artifacts/{cur_data}_{q}.npy', sentences)
     
     def save(self):
         if len(self.words_index) <= 1:
@@ -53,20 +76,35 @@ class BuildVocab:
         with open(self.save_path, 'w', encoding='utf8') as f:
             json.dump(self.words_index, f, ensure_ascii=False)
     
-    def load(self):
+    def load_dict(self):
         if not os.path.exists(self.save_path):
             raise ValueError('no vocab dictionary at the location')
         with open(self.save_path, 'r', encoding='utf8') as f:
             words_index = json.load(f)
+            self.words_index = words_index
             return words_index
+    
+    def load_arrays(self):
+        nps = {}
+        for q in self.columns:
+            for d in ['train', 'test']:
+                cur_path = f'artifacts/{d}_{q}.npy'
+                if not os.path.exists(cur_path):
+                    raise ValueError(f'{cur_path} does not exist, please run convert_sent_to_index method first')
+                data = np.load(cur_path)
+                f_name = os.path.basename(cur_path)[:-4]
+                nps[f_name] = data
+        return nps
 
 if __name__ == '__main__':
     build_vocab = BuildVocab(
         'data/train.csv',
-        'data/test.csv'
+        'data/test.csv',
+        max_len=40
       )
     build_vocab.vocab()
     build_vocab.save()
+    build_vocab.convert_sent_to_index()
 
 #%%
 
