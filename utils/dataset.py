@@ -5,6 +5,7 @@ from torch.utils.data import Dataset
 class QQPDataset(Dataset):
     def __init__(self,
                  data,
+                 target,
                  words_index,
                  max_len,
                  mode='train'):

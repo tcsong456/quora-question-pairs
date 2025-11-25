@@ -2,7 +2,6 @@ import torch
 import numpy as np
 from torch import nn
 from torch.nn import functional as F
-from gensim.models.fasttext import load_facebook_model
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
 class BiMPM(nn.Module):
@@ -312,10 +311,7 @@ class BiMPM(nn.Module):
         
 
 #%%
-import pandas as pd
-from utils.build_vocab import BuildVocab
-from utils.dataset import QQPDataset
-from torch.utils.data import DataLoader
+
 # bv = BuildVocab('data/train.csv',
 #                 'data/test.csv')
 # words_index = bv.load()
@@ -341,22 +337,20 @@ from torch.utils.data import DataLoader
 
 # vec_model = load_facebook_model('artifacts/cc.en.300.bin')
 
-model = BiMPM(emb_dim=300,
-              hidden_size=150,
-              batch_size=128,
-              max_len=40,
-              words_index_dict=words_index,
-              mp_dim=20,
-              vec_model=vec_model,
-              device=device,
-              multi_attn_head=False).to(device)
-a = model(batch)
+# model = BiMPM(emb_dim=300,
+#               hidden_size=150,
+#               batch_size=128,
+#               max_len=40,
+#               words_index_dict=words_index,
+#               mp_dim=20,
+#               vec_model=vec_model,
+#               device=device,
+#               multi_attn_head=False).to(device)
+# a = model(batch)
 # q2_fw.shape
 
 #%%
-# q1_len = batch[3]
-# q2_len = batch[4]
-a
+
 
 
 
