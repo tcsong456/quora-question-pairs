@@ -5,11 +5,15 @@ from torch.utils.data import Dataset
 class QQPDataset(Dataset):
     def __init__(self,
                  data,
-                 target,
                  words_index,
                  max_len,
+                 target=None,
                  mode='train'):
         assert mode in ['train', 'val', 'test']
+        if mode != 'test':
+            assert target is not None
+        else:
+            assert target is None
         self.mode = mode
         self.max_len = max_len
         self.words_index = words_index
@@ -18,10 +22,11 @@ class QQPDataset(Dataset):
             data[c] = data[c].fillna("").astype(str)
         
         if mode != 'test':
-            columns = ['id', 'question1', 'question2', 'is_duplicate']
+            columns = ['id', 'question1', 'question2']
         else:
             columns = ['test_id', 'question1', 'question2']
         self.data = data[columns]
+        self.target = target
         nlp = spacy.blank('en')
         self.tokenizer = nlp.tokenizer
     
@@ -47,7 +52,7 @@ class QQPDataset(Dataset):
         
         if self.mode != 'test':
             id = row['id']
-            y = row['is_duplicate']
+            y = self.target.iloc[index].values
             return id, q1_index, q2_index, q1_len, q2_len, y
         else:
             id = row['test_id']

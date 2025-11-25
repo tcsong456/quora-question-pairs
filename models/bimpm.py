@@ -89,6 +89,17 @@ class BiMPM(nn.Module):
         q2_q1_rep = self.matching_layer_dropout(torch.cat(match_q2_to_q1, dim=-1))
         q1_q2_fw, q1_q2_bw = self._handle_lstm(q1_q2_rep, q1_len, self.matching_pools_bilstm, self.decoder_lstm_dropout, 100)
         q2_q1_fw, q2_q1_bw = self._handle_lstm(q2_q1_rep, q2_len, self.matching_pools_bilstm, self.decoder_lstm_dropout, 100)
+        
+        q1_q2_mask = torch.arange(self.max_len, device=q1_q2_fw.device).unsqueeze(0) < q1_len.unsqueeze(1)
+        q1_q2_mask = q1_q2_mask.unsqueeze(-1) 
+        q1_q2_fw = q1_q2_fw.masked_fill(~q1_q2_mask, float('-inf'))
+        q1_q2_bw = q1_q2_bw.masked_fill(~q1_q2_mask, float('-inf'))
+        
+        q2_q1_mask = torch.arange(self.max_len, device=q2_q1_fw.device).unsqueeze(0) < q2_len.unsqueeze(1)
+        q2_q1_mask = q2_q1_mask.unsqueeze(-1)
+        q2_q1_fw = q2_q1_fw.masked_fill(~q2_q1_mask, float('-inf'))
+        q2_q1_bw = q2_q1_bw.masked_fill(~q2_q1_mask, float('-inf'))
+        
         q1_q2_fw_state, _ = q1_q2_fw.max(dim=1)
         q1_q2_bw_state, _ = q1_q2_bw.max(dim=1)
         q2_q1_fw_state, _ = q2_q1_fw.max(dim=1)
@@ -193,8 +204,9 @@ class BiMPM(nn.Module):
                 bw_additive_attn, bw_concat_attn], dim=-1)
             fw_max_att_score = self.multi_attentive_head(fw_max_attn).squeeze(dim=-1)
             bw_max_att_score = self.multi_attentive_head(bw_max_attn).squeeze(dim=-1)
-            fw_max_att_score = fw_max_att_score.masked_fill(~mask.bool(), -1e9)
-            bw_max_att_score = bw_max_att_score.masked_fill(~mask.bool(), -1e9)
+            neg_inf = torch.finfo(fw_max_att_score.dtype).min
+            fw_max_att_score = fw_max_att_score.masked_fill(~mask.bool(), neg_inf)
+            bw_max_att_score = bw_max_att_score.masked_fill(~mask.bool(), neg_inf)
             fw_max_att = torch.softmax(fw_max_att_score, dim=-1)
             bw_max_att = torch.softmax(bw_max_att_score, dim=-1)
             fw_max_att_matching = self._max_attentive_matching(q1_fw, q2_fw, fw_max_att)
@@ -311,46 +323,6 @@ class BiMPM(nn.Module):
         
 
 #%%
-
-# bv = BuildVocab('data/train.csv',
-#                 'data/test.csv')
-# words_index = bv.load()
-
-# train = pd.read_csv('data/train.csv')
-# dataset = QQPDataset(
-#     data=train,
-#     words_index=words_index,
-#     max_len=40,
-#     mode='train'
-#   )
-# dl = DataLoader(dataset,
-#                 shuffle=True,
-#                 batch_size=128
-#                 )
-# for batch in dl:
-#     break
-  
-# device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-# for i, v in enumerate(batch):
-#     if isinstance(v, torch.Tensor):
-#         batch[i] = v.to(device)
-
-# vec_model = load_facebook_model('artifacts/cc.en.300.bin')
-
-# model = BiMPM(emb_dim=300,
-#               hidden_size=150,
-#               batch_size=128,
-#               max_len=40,
-#               words_index_dict=words_index,
-#               mp_dim=20,
-#               vec_model=vec_model,
-#               device=device,
-#               multi_attn_head=False).to(device)
-# a = model(batch)
-# q2_fw.shape
-
-#%%
-
 
 
 
