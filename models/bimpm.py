@@ -14,6 +14,7 @@ class BiMPM(nn.Module):
                  max_len,
                  batch_size,
                  vec_model,
+                 device='cpu',
                  multi_attn_head=False):
         super().__init__()
         embedding_matrix = np.zeros((len(words_index_dict), emb_dim), dtype=np.float32)
@@ -35,6 +36,7 @@ class BiMPM(nn.Module):
         self.multi_attn_head = multi_attn_head
         self.max_len = max_len
         self.batch_size = batch_size
+        self.device = device
         
         self.contextual_bilstm = nn.LSTM(emb_dim,
                                          hidden_size,
@@ -118,14 +120,14 @@ class BiMPM(nn.Module):
         max_len = q1_fw.shape[1]
         actual_q1_len = q1_lengths[:, None]
         actual_q2_len = q2_lengths[:, None]
-        ref_len = torch.arange(max_len)[None]
+        ref_len = torch.arange(max_len)[None].to(self.device)
         mask1 = ref_len < actual_q1_len
         mask2 = ref_len < actual_q2_len
         mask = (mask1[:, :, None] * mask2[:, None]).to(torch.long)
         
         batch_size = q1_lengths.shape[0]
         batch_idx = torch.arange(batch_size)
-        batch_idx = batch_idx[:,None]
+        batch_idx = batch_idx[:,None].to(self.device)
         actual_q2_last = q2_lengths[:, None] - 1
         q2_idx = torch.cat([batch_idx, actual_q2_last], dim=1)
         last_q2_fw = q2_fw[q2_idx[:, 0], q2_idx[:, 1]]
@@ -233,7 +235,7 @@ class BiMPM(nn.Module):
         return mul_x
     
     def _post_attn_process(self, logits, x2_len, pad_mask):
-        ref_len = torch.arange(self.max_len)[None]
+        ref_len = torch.arange(self.max_len)[None].to(self.device)
         mask = (ref_len < x2_len[:, None]).to(torch.long)
         mask = mask[:, None]
         logits = mask * logits + (1 - mask) * -1e9
@@ -331,7 +333,13 @@ from torch.utils.data import DataLoader
 #                 )
 # for batch in dl:
 #     break
-vec_model = load_facebook_model('artifacts/cc.en.300.bin')
+  
+# device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+# for i, v in enumerate(batch):
+#     if isinstance(v, torch.Tensor):
+#         batch[i] = v.to(device)
+
+# vec_model = load_facebook_model('artifacts/cc.en.300.bin')
 
 model = BiMPM(emb_dim=300,
               hidden_size=150,
@@ -340,7 +348,8 @@ model = BiMPM(emb_dim=300,
               words_index_dict=words_index,
               mp_dim=20,
               vec_model=vec_model,
-              multi_attn_head=True)
+              device=device,
+              multi_attn_head=False).to(device)
 a = model(batch)
 # q2_fw.shape
 
@@ -348,5 +357,6 @@ a = model(batch)
 # q1_len = batch[3]
 # q2_len = batch[4]
 a
+
 
 
