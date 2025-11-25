@@ -45,7 +45,6 @@ class Trainer:
     def __init__(self,
                  vocab,
                  vec_model,
-                 loss_fn,
                  epochs=50,
                  amp=True):
         train = vocab.train_data
@@ -78,7 +77,6 @@ class Trainer:
         self.model = BiMPM(
             emb_dim=300,
             hidden_size=150,
-            batch_size=128,
             max_len=40,
             words_index_dict=words_index_dict,
             mp_dim=20,
@@ -86,9 +84,9 @@ class Trainer:
             device=device,
             multi_attn_head=False
           ).to(device)
-        self.loss_fn = loss_fn
+        self.loss_fn = nn.BCEWithLogitsLoss()
         self.optimizer = optim.Adam(self.model.parameters(),
-                                    lr=0.002)
+                                    lr=0.01)
     
     def train_one_epoch(self, epoch, scaler):
         self.model.train()
@@ -118,7 +116,7 @@ class Trainer:
                 y_true = batch[-1]
                 with autocast(enabled=self.amp):
                     y_pred = self.model(batch)
-                    loss = self.loss_fn(y_true, y_pred)
+                    loss = self.loss_fn(y_pred, y_true.float())
                 
                 scaler.scale(loss).backward()
                 scaler.step(self.optimizer)
@@ -145,7 +143,6 @@ if __name__ == '__main__':
     trainer = Trainer(
         vocab=bv,
         vec_model=vec_model,
-        loss_fn=CrossEntropyLoss(eps=1e-6),
         amp=True
       )
     trainer.fit()

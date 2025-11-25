@@ -43,6 +43,10 @@ class BuildVocab:
                     self.words_index[w] = ind
                     ind += 1
     
+    def convert_sent_to_idx(self):
+        for col in ['question1', 'question2']:
+          
+    
     def save(self):
         if len(self.words_index) <= 1:
             warnings.warn('build the vocab dictionary before saving')
