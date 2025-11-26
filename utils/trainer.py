@@ -32,7 +32,7 @@ class CrossEntropyLoss(nn.Module):
         super().__init__()
         self.eps = eps
     
-    def forward(self, yt, yp):
+    def forward(self, yp, yt):
         if yt.ndim == 1:
             yt = yt[:, None]
         if yp.ndim == 1:
@@ -48,31 +48,21 @@ class Trainer:
                  epochs=50,
                  amp=True):
         train = vocab.train_data
-        test = vocab.test_data
-        self.train = train
-        self.test = test
-        words_index_dict = vocab.load()
+        words_index_dict = vocab.load_dict()
         self.words_index_dict = words_index_dict
         device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
         self.device = device
         self.amp = amp
         self.epochs = epochs
+        self.vocab = vocab
         
         self.data_train, self.data_val = [], []
-        y = train['is_duplicate']
+        y = train['is_duplicate'].values
         x = train.drop('is_duplicate', axis=1)
         skf = StratifiedKFold(n_splits=5, random_state=7610, shuffle=True)
-        for train_idx, val_idx in skf.split(x, y):
-            x_train, x_val = x.iloc[train_idx], x.iloc[val_idx]
-            y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
-            
-            x_train = x_train.reset_index().drop('index', axis=1)
-            x_val = x_val.reset_index().drop('index', axis=1)
-            y_train = y_train.reset_index().drop('index', axis=1)
-            y_val = y_val.reset_index().drop('index', axis=1)
-            
-            self.data_train.append((x_train, y_train))
-            self.data_val.append((x_val, y_val))
+        for train_idx, val_idx in skf.split(x, y):            
+            self.data_train.append(train_idx)
+            self.data_val.append(val_idx)
         
         self.model = BiMPM(
             emb_dim=300,
@@ -86,22 +76,20 @@ class Trainer:
           ).to(device)
         self.loss_fn = nn.BCEWithLogitsLoss()
         self.optimizer = optim.Adam(self.model.parameters(),
-                                    lr=0.01)
+                                    lr=0.002)
     
     def train_one_epoch(self, epoch, scaler):
         self.model.train()
-        for i, (x_tr, y_tr) in enumerate(self.data_train):
+        for i, train_idx in enumerate(self.data_train):
             loss_meter = AverageMeter()
             current_lr = self.optimizer.param_groups[0]['lr']
-            train_dataset = QQPDataset(data=x_tr,
-                                       words_index=self.words_index_dict,
-                                       max_len=40,
-                                       target=y_tr,
+            train_dataset = QQPDataset(bv=self.vocab,
+                                       q_idx=train_idx,
                                        mode='train')
             train_dataloader = DataLoader(
                 train_dataset,
                 shuffle=True,
-                batch_size=128
+                batch_size=256
               )
             train_dl = tqdm(train_dataloader,
                             total=len(train_dataloader),
@@ -116,7 +104,7 @@ class Trainer:
                 y_true = batch[-1]
                 with autocast(enabled=self.amp):
                     y_pred = self.model(batch)
-                    loss = self.loss_fn(y_pred, y_true.float())
+                    loss = self.loss_fn(y_pred.view(-1), y_true.float())
                 
                 scaler.scale(loss).backward()
                 scaler.step(self.optimizer)
@@ -136,34 +124,16 @@ class Trainer:
             self.train_one_epoch(epoch, scaler)
 
 if __name__ == '__main__':
-    # bv = BuildVocab('data/train.csv',
-    #                 'data/test.csv')
-    # words_index = bv.load_dict()
-    # vec_model = load_facebook_model('artifacts/cc.en.300.bin')
+    bv = BuildVocab('data/train.csv',
+                    'data/test.csv')
+    vec_model = load_facebook_model('artifacts/cc.en.300.bin')
     trainer = Trainer(
         vocab=bv,
         vec_model=vec_model,
         amp=True
       )
     trainer.fit()
-
-#%%
-train = pd.read_csv('data/train.csv')
-target = train['is_duplicate']
-train.drop('is_duplicate', axis=1, inplace=True)
-skf = StratifiedKFold(n_splits=5, random_state=7610, shuffle=True)
-for i, (train_idx, val_idx) in enumerate(skf.split(train, target)):
-    x_train, x_val = train.iloc[train_idx], train.iloc[val_idx]
-    y_train, y_val = target.iloc[train_idx], target.iloc[val_idx]
-    
-    # x_train.reset_index().drop('index', axis=1, inplace=True)
-    # x_val.reset_index().drop('index', axis=1, inplace=True)
-    # y_train.reset_index().drop('index', axis=1, inplace=True)
-    # y_val.reset_index().drop('index', axis=1, inplace=True)
-    
-    break
     
   #%%
-# x_train = x_train.reset_index().drop('index', axis=1)
-x_train
+
 

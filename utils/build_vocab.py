@@ -1,6 +1,5 @@
 import os
 import json
-import pickle
 import spacy
 import warnings
 import pandas as pd
@@ -14,6 +13,8 @@ class BuildVocab:
                  max_len=30):
         train = pd.read_csv(train_path)
         test = pd.read_csv(test_path)
+        train = self._mask_data(train)
+        test = self._mask_data(test)
         self.train_data = train
         self.test_data = test
         self.words_index = {}
@@ -24,6 +25,12 @@ class BuildVocab:
         self.save_path = 'artifacts/words_index.json'
         self.vocab_exe = False
         self.max_len = max_len
+    
+    def _mask_data(self, data):
+        mask = pd.isnull(data['question1']) | pd.isnull(data['question2'])
+        data = data[~mask]
+        data = data.reset_index().drop('index', axis=1)
+        return data
     
     def vocab(self):
         ind = 2
@@ -57,18 +64,21 @@ class BuildVocab:
         unk_idx = self.words_index['<unk>']
         for q in self.columns:
             for i, d in enumerate([self.train_data, self.test_data]):
-                sentences = []
+                sentences, sent_lens = [], []
                 cur_data = 'train' if i == 0 else 'test'
                 tq_ts = tqdm(d[q].values, total=d.shape[0], desc=f'converting sentence to word index for {cur_data} {q}')
                 for sent in tq_ts:
                     tokens = self.tokenizer(sent)
                     sent_index = [self.words_index.get(token.text.lower(), unk_idx) for token in tokens]
                     sent_index = sent_index[:self.max_len]
+                    sent_len = len(sent_index)
+                    sent_lens.append(sent_len)
                     if len(sent_index) < self.max_len:
                         sent_index += [self.words_index['<pad>']] * (self.max_len - len(sent_index))
                     sentences.append(sent_index)
                 sentences = np.array(sentences)
                 np.save(f'artifacts/{cur_data}_{q}.npy', sentences)
+                np.save(f'artifacts/{cur_data}_{q}_len.npy', np.array(sent_lens))
     
     def save(self):
         if len(self.words_index) <= 1:
@@ -86,14 +96,19 @@ class BuildVocab:
     
     def load_arrays(self):
         nps = {}
-        for q in self.columns:
+        for q in ['question1', 'question2']:
             for d in ['train', 'test']:
-                cur_path = f'artifacts/{d}_{q}.npy'
+                base_path = f'artifacts/{d}_{q}'
+                cur_path = f'{base_path}.npy'
+                len_path = f'{base_path}_len.npy'
                 if not os.path.exists(cur_path):
                     raise ValueError(f'{cur_path} does not exist, please run convert_sent_to_index method first')
                 data = np.load(cur_path)
-                f_name = os.path.basename(cur_path)[:-4]
+                data_len = np.load(len_path)
+                f_name = os.path.basename(base_path)
+                f_len_name = os.path.basename(len_path)[:-4]
                 nps[f_name] = data
+                nps[f_len_name] = data_len
         return nps
 
 if __name__ == '__main__':

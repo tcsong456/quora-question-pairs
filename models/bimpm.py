@@ -51,7 +51,7 @@ class BiMPM(nn.Module):
         self.encoder_lstm_dropout = nn.Dropout(0.2)
         self.matching_layer_dropout = nn.Dropout(0.3)
         self.decoder_lstm_dropout = nn.Dropout(0.2)
-        self.dense_rep_dropout = nn.Dropout(0.3)
+        self.dense_rep_dropout = nn.Dropout(0.2)
         
         self.full_matching_weights = nn.Parameter(torch.empty(mp_dim, hidden_size))
         nn.init.xavier_uniform_(self.full_matching_weights)
@@ -144,12 +144,12 @@ class BiMPM(nn.Module):
         bw_full_matching = self._full_matching(q1_bw, last_q2_bw)
         matches.append(fw_full_matching)
         matches.append(bw_full_matching)
-        
+
         fw_pool_matching = self._pooling_matching(q1_fw, q2_fw, q2_lengths)
         bw_pool_matching = self._pooling_matching(q1_bw, q2_bw, q2_lengths)
         matches.append(fw_pool_matching)
         matches.append(bw_pool_matching)
-        
+
         fw_cosine_attn = self._cosine_attn(q1_fw, q2_fw, q2_lengths, mask)
         bw_cosine_attn = self._cosine_attn(q1_bw, q2_bw, q2_lengths, mask)
         fw_cosine_sim = self._weight_sent_by_attn(q2_fw, fw_cosine_attn)
@@ -245,16 +245,12 @@ class BiMPM(nn.Module):
     def _post_attn_process(self, logits, x2_len, pad_mask):
         ref_len = torch.arange(self.max_len)[None].to(self.device)
         mask = ref_len < x2_len[:, None]
-        mask = mask[:, None]
-        full_mask = mask & pad_mask.bool()
-        logits = logits.masked_fill(~full_mask, float('-inf'))
-        attn = torch.softmax(logits, dim=-1) 
-        
-        # logits = mask * logits + (1 - mask) * float('-inf')
-        # logits = logits - torch.max(logits, dim=-1, keepdim=True)[0]
-        # attn = torch.exp(logits)
-        # attn = attn * pad_mask
-        # attn = attn / (torch.sum(attn, dim=-1, keepdim=True) + 1e-6)
+        mask = mask[:, None].float()        
+        logits = mask * logits + (1 - mask) * 1e-9
+        logits = logits - torch.max(logits, dim=-1, keepdim=True)[0]
+        attn = torch.exp(logits)
+        attn = attn * pad_mask
+        attn = attn / (torch.sum(attn, dim=-1, keepdim=True) + 1e-6)
         return attn
     
     def _multiplicative_attn(self, x1, x2, x2_len, pad_mask):
@@ -319,26 +315,16 @@ class BiMPM(nn.Module):
         word_to_word_weighted_perpective = word_to_word_weighted_perpective.reshape(-1, self.max_len, self.mp_dim)
         return word_to_word_weighted_perpective
     
-    # def _max_attentive_matching(self, x1, x2, m):
-    #     idx = m.argmax(dim=-1)
-    #     batch_idx = torch.arange(idx.shape[0])[:, None].expand(-1, self.max_len)
-    #     x2 = x2[batch_idx, idx, :]
-    #     word_to_word_max_perspective = self._attentive_matching(x1, x2, self.max_att_matching_weights)
-    #     return word_to_word_max_perspective
-    
     def _max_attentive_matching(self, x1, x2, m):
-        idx = m.argmax(dim=-1)  # (B, T1)
-    
-        idx_expanded = idx.unsqueeze(-1).expand(-1, -1, x2.size(-1))  # (B, T1, H)
-        x2_max = x2.gather(1, idx_expanded)  # (B, T1, H)
-    
-        word_to_word_max_perspective = self._attentive_matching(
-            x1, x2_max, self.max_att_matching_weights
-        )
+        idx = m.argmax(dim=-1)
+        batch_idx = torch.arange(idx.shape[0])[:, None].expand(-1, self.max_len)
+        x2 = x2[batch_idx, idx, :]
+        word_to_word_max_perspective = self._attentive_matching(x1, x2, self.max_att_matching_weights)
         return word_to_word_max_perspective
         
 
 #%%
+
 
 
 
