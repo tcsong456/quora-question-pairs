@@ -35,6 +35,7 @@ class Trainer:
                  epochs=50,
                  warm_start=False,
                  amp=True,
+                 use_mul_head_attn=False,
                  early_stopping=1):
         train = vocab.train_data
         words_index_dict = vocab.load_dict()
@@ -62,7 +63,7 @@ class Trainer:
                           mp_dim=20,
                           vec_model=vec_model,
                           device=device,
-                          multi_attn_head=True
+                          multi_attn_head=use_mul_head_attn
                         ).to(device)
             optimizer = optim.Adam(model.parameters(),
                                    lr=0.002)
@@ -80,12 +81,17 @@ class Trainer:
         os.makedirs('checkpoints', exist_ok=True)
         self.loss_fn = nn.BCEWithLogitsLoss()
         self.early_stopping = early_stopping
+        if use_mul_head_attn:
+            suffix = '_multi_head'
+        else:
+            suffix = ''
+        self.suffix = suffix
     
     def train(self, fold):
         model = self.models[fold]
         optimizer = self.optimizers[fold]
         lr_scheduler = self.schedulers[fold]
-        checkpoint_path = f'checkpoints/bimpm_{fold}.pth'
+        checkpoint_path = f'checkpoints/bimpm_{fold}{self.suffix}.pth'
         best_loss = np.inf
         bad_epoch = 0
         start_epoch = 0
@@ -188,7 +194,7 @@ class Trainer:
                     features = torch.cat(features,dim=0)
                     features = features.detach().cpu().numpy()
                     features = np.concatenate([ids[:, None], features], axis=1)
-                    np.save(f'artifacts/bimpm_features_{fold}.npy', features)
+                    np.save(f'artifacts/bimpm_features_{fold}{self.suffix}.npy', features)
                 else:
                     bad_epoch += 1
             if bad_epoch == self.early_stopping:
@@ -206,6 +212,7 @@ if __name__ == '__main__':
         warm_start=False,
         early_stopping=3,
         epochs=100,
+        use_mul_head_attn=False,
       )
     for fold in range(5):
         trainer.train(fold)
