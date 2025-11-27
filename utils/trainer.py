@@ -149,51 +149,51 @@ class Trainer:
                     } 
                   )
 
-            # val_dl = tqdm(val_dataloader,
-            #               total=len(val_dataloader),
-            #               desc=f'running fold {fold} in evaluation')
-            # features,ids = [], []
-            # with torch.no_grad():
-            #     model.eval()
-            #     for batch in val_dl:
-            #         for i, v in enumerate(batch):
-            #             if isinstance(v, torch.Tensor):
-            #                 batch[i] = v.to(self.device)
+            val_dl = tqdm(val_dataloader,
+                          total=len(val_dataloader),
+                          desc=f'running fold {fold} in evaluation')
+            features,ids = [], []
+            with torch.no_grad():
+                model.eval()
+                for batch in val_dl:
+                    for i, v in enumerate(batch):
+                        if isinstance(v, torch.Tensor):
+                            batch[i] = v.to(self.device)
                 
-            #         yt = batch[-1]
-            #         with autocast(enabled=self.amp):
-            #             yp, feature = model(batch, return_embedding=True)
-            #             val_loss = self.loss_fn(yp.view(-1), yt.float())
-            #             features.append(feature)
-            #         id = batch[0].cpu().numpy()
-            #         ids.append(id)
-            #         loss_meter_val.update(val_loss, 1)
-            #         val_loss = loss_meter_val.average
-            #         val_dl.set_postfix({
-            #             f'epoch {epoch} loss': f'{val_loss: .5f}'
-            #           })
-            #     lr_scheduler.step(val_loss)
+                    yt = batch[-1]
+                    with autocast(enabled=self.amp):
+                        yp, feature = model(batch, return_embedding=True)
+                        val_loss = self.loss_fn(yp.view(-1), yt.float())
+                        features.append(feature)
+                    id = batch[0].cpu().numpy()
+                    ids.append(id)
+                    loss_meter_val.update(val_loss, 1)
+                    val_loss = loss_meter_val.average
+                    val_dl.set_postfix({
+                        f'epoch {epoch} loss': f'{val_loss: .5f}'
+                      })
+                lr_scheduler.step(val_loss)
                 
-            #     if val_loss <  best_loss:
-            #         best_loss = val_loss
-            #         bad_epoch = 0
-            #         torch.save({
-            #             'model': model.state_dict(),
-            #             'optimizer': optimizer.state_dict(),
-            #             'lr_scheduler': lr_scheduler.state_dict(),
-            #             'best_loss': best_loss,
-            #             'epoch': epoch
-            #           }, checkpoint_path)
-            #         ids = np.concatenate(ids)
-            #         features = torch.cat(features,dim=0)
-            #         features = features.detach().cpu().numpy()
-            #         features = np.concatenate([ids[:, None], features], axis=1)
-            #         np.save(f'artifacts/bimpm_features_{fold}.npy', features)
-            #     else:
-            #         bad_epoch += 1
-            # if bad_epoch == self.early_stopping:
-            #     print(f'early stopping reaches at epoch: {epoch}')
-            #     break
+                if val_loss <  best_loss:
+                    best_loss = val_loss
+                    bad_epoch = 0
+                    torch.save({
+                        'model': model.state_dict(),
+                        'optimizer': optimizer.state_dict(),
+                        'lr_scheduler': lr_scheduler.state_dict(),
+                        'best_loss': best_loss,
+                        'epoch': epoch
+                      }, checkpoint_path)
+                    ids = np.concatenate(ids)
+                    features = torch.cat(features,dim=0)
+                    features = features.detach().cpu().numpy()
+                    features = np.concatenate([ids[:, None], features], axis=1)
+                    np.save(f'artifacts/bimpm_features_{fold}.npy', features)
+                else:
+                    bad_epoch += 1
+            if bad_epoch == self.early_stopping:
+                print(f'early stopping reaches at epoch: {epoch}')
+                break
 
 if __name__ == '__main__':
     bv = BuildVocab('data/train.csv',
@@ -211,6 +211,7 @@ if __name__ == '__main__':
         trainer.train(fold)
     
   #%%
+
 
 
 
