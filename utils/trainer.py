@@ -1,3 +1,4 @@
+import os
 import torch
 import warnings
 warnings.filterwarnings(action='ignore')
@@ -27,25 +28,12 @@ class AverageMeter:
         self.sum += value * n
         self.average = self.sum / max(self.cnt, 1)
 
-class CrossEntropyLoss(nn.Module):
-    def __init__(self, eps):
-        super().__init__()
-        self.eps = eps
-    
-    def forward(self, yp, yt):
-        if yt.ndim == 1:
-            yt = yt[:, None]
-        if yp.ndim == 1:
-            yp = yp[:, None]
-        
-        ce_loss = -(yt * torch.log(yp + self.eps) + (1 - yt) * torch.log(1 - yp + self.eps)).mean()
-        return ce_loss
-
 class Trainer:
     def __init__(self,
                  vocab,
                  vec_model,
                  epochs=50,
+                 warm_start=False,
                  amp=True):
         train = vocab.train_data
         words_index_dict = vocab.load_dict()
@@ -57,6 +45,7 @@ class Trainer:
         self.vocab = vocab
         
         self.data_train, self.data_val = [], []
+        self.models, self.optimizers, self.schedulers = [], [], []
         y = train['is_duplicate'].values
         x = train.drop('is_duplicate', axis=1)
         skf = StratifiedKFold(n_splits=5, random_state=7610, shuffle=True)
@@ -64,64 +53,104 @@ class Trainer:
             self.data_train.append(train_idx)
             self.data_val.append(val_idx)
         
-        self.model = BiMPM(
-            emb_dim=300,
-            hidden_size=150,
-            max_len=40,
-            words_index_dict=words_index_dict,
-            mp_dim=20,
-            vec_model=vec_model,
-            device=device,
-            multi_attn_head=False
-          ).to(device)
+            model = BiMPM(
+                          emb_dim=300,
+                          hidden_size=150,
+                          max_len=40,
+                          words_index_dict=words_index_dict,
+                          mp_dim=20,
+                          vec_model=vec_model,
+                          device=device,
+                          multi_attn_head=True
+                        ).to(device)
+            optimizer = optim.Adam(self.model.parameters(),
+                                   lr=0.002)
+            lr_scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+                  optimizer,
+                  factor=0.1,
+                  patience=1,
+                  mode='min'
+                )
+            self.optimizers.append(optimizer)
+            self.models.append(model)
+            self.schedulers.append(lr_scheduler)
+        
+        os.mkdir(path='checkpoints', exist_ok=True)
         self.loss_fn = nn.BCEWithLogitsLoss()
-        self.optimizer = optim.Adam(self.model.parameters(),
-                                    lr=0.002)
+        if warm_start:
+            
     
-    def train_one_epoch(self, epoch, scaler):
+    def train(self):
         self.model.train()
-        for i, train_idx in enumerate(self.data_train):
-            loss_meter = AverageMeter()
-            current_lr = self.optimizer.param_groups[0]['lr']
+        scaler = GradScaler(enabled=self.amp)
+        for i, (train_idx, val_idx) in enumerate(self.data_train, self.data_val):
+            loss_meter_tr = AverageMeter()
+            loss_meter_val = AverageMeter()
+            model = self.models[i]
+            optimizer = self.optimizers[i]
+            current_lr = optimizer.param_groups[0]['lr']
             train_dataset = QQPDataset(bv=self.vocab,
                                        q_idx=train_idx,
                                        mode='train')
+            val_dataset = QQPDataset(bv=self.vocab,
+                                     q_idx=val_idx,
+                                     mode='val')
             train_dataloader = DataLoader(
                 train_dataset,
                 shuffle=True,
-                batch_size=256
+                batch_size=512
               )
-            train_dl = tqdm(train_dataloader,
-                            total=len(train_dataloader),
-                            desc=f'running fold {i} in training')
+            val_dataloader = DataLoader(
+                val_dataset,
+                shuffle=False,
+                batch_size=512
+              )
             
-            for batch in train_dl:
-                for i, v in enumerate(batch):
-                    if isinstance(v, torch.Tensor):
-                        batch[i] = v.to(self.device)
+            val_dl = tqdm(val_dataloader,
+                          total=len(val_dataloader),
+                          desc=f'running fold {i} in evaluation')
+            
+            for epoch in range(self.epochs):
+                train_dl = tqdm(train_dataloader,
+                                total=len(train_dataloader),
+                                desc=f'running fold {i} in training')
+                for batch in train_dl:
+                    for i, v in enumerate(batch):
+                        if isinstance(v, torch.Tensor):
+                            batch[i] = v.to(self.device)
+                    
+                    optimizer.zero_grad()
+                    y_true = batch[-1]
+                    with autocast(enabled=self.amp):
+                        y_pred = model(batch)
+                        loss = self.loss_fn(y_pred.view(-1), y_true.float())
+                    
+                    scaler.scale(loss).backward()
+                    scaler.step(self.optimizer)
+                    scaler.update()
+                    
+                    loss_meter_tr.update(loss.item(), 1)
+                    loss = loss_meter_tr.average
+                    train_dl.set_postfix({
+                        f'epoch {epoch} loss': f'{loss:.5f}',
+                       'lr': f'{current_lr: .4f}'
+                       } 
+                      )
                 
-                self.optimizer.zero_grad()
-                y_true = batch[-1]
-                with autocast(enabled=self.amp):
-                    y_pred = self.model(batch)
-                    loss = self.loss_fn(y_pred.view(-1), y_true.float())
-                
-                scaler.scale(loss).backward()
-                scaler.step(self.optimizer)
-                scaler.update()
-                
-                loss_meter.update(loss.item(), 1)
-                loss = loss_meter.average
-                train_dl.set_postfix({
-                    f'epoch {epoch} loss': f'{loss:.5f}',
-                   'lr': f'{current_lr: .4f}'
-                   } 
-                  )
-      
-    def fit(self):
-        scaler = GradScaler(enabled=self.amp)
-        for epoch in range(self.epochs):
-            self.train_one_epoch(epoch, scaler)
+                with torch.no_grad():
+                    for batch in val_dl:
+                        for i, v in enumerate(batch):
+                            if isinstance(v, torch.Tensor):
+                                batch[i] = v.to(self.device)
+                    
+                    yt = batch[-1]
+                    yp = model(batch)
+                    val_loss = self.loss_fn(yp.view(-1), yt.float())
+                    loss_meter_val.update(val_loss, 1)
+                    val_loss = loss_meter_val.average
+                    val_dl.set_postfix({
+                        f'epoch {epoch} loss': f'{val_loss: .5f}'
+                      })
 
 if __name__ == '__main__':
     bv = BuildVocab('data/train.csv',
@@ -132,7 +161,7 @@ if __name__ == '__main__':
         vec_model=vec_model,
         amp=True
       )
-    trainer.fit()
+    trainer.train()
     
   #%%
 
