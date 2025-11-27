@@ -72,9 +72,11 @@ class BiMPM(nn.Module):
             self.multi_attentive_head = nn.Linear(4, 1)
             self.multi_mp_compression = nn.Linear(4*mp_dim, mp_dim)
         self.agg_rep_later = nn.Linear(4*100, 100)
-        self.predict_layer = nn.Linear(100, 1)
+        self.predict_layer = nn.Linear(200, 1)
+        
+        self.helper_layer = nn.Linear(8*mp_dim, 1)
     
-    def forward(self, batch):
+    def forward(self, batch, return_embedding=False):
         q1 = batch[1]
         q2 = batch[2]
         q1_len = batch[3]
@@ -83,31 +85,41 @@ class BiMPM(nn.Module):
         agg_representations = []
         match_q1_to_q2 = self.matching_sequence(q1, q2, q1_len, q2_len)
         match_q2_to_q1 = self.matching_sequence(q2, q1, q2_len, q1_len)
+
         q1_q2_rep = self.matching_layer_dropout(torch.cat(match_q1_to_q2, dim=-1))
         q2_q1_rep = self.matching_layer_dropout(torch.cat(match_q2_to_q1, dim=-1))
-        q1_q2_fw, q1_q2_bw = self._handle_lstm(q1_q2_rep, q1_len, self.matching_pools_bilstm, self.decoder_lstm_dropout, 100)
-        q2_q1_fw, q2_q1_bw = self._handle_lstm(q2_q1_rep, q2_len, self.matching_pools_bilstm, self.decoder_lstm_dropout, 100)
-        
-        q1_q2_mask = torch.arange(self.max_len, device=q1_q2_fw.device).unsqueeze(0) < q1_len.unsqueeze(1)
-        q1_q2_mask = q1_q2_mask.unsqueeze(-1) 
-        q1_q2_fw = q1_q2_fw.masked_fill(~q1_q2_mask, float('-inf'))
-        q1_q2_bw = q1_q2_bw.masked_fill(~q1_q2_mask, float('-inf'))
-        
-        q2_q1_mask = torch.arange(self.max_len, device=q2_q1_fw.device).unsqueeze(0) < q2_len.unsqueeze(1)
-        q2_q1_mask = q2_q1_mask.unsqueeze(-1)
-        q2_q1_fw = q2_q1_fw.masked_fill(~q2_q1_mask, float('-inf'))
-        q2_q1_bw = q2_q1_bw.masked_fill(~q2_q1_mask, float('-inf'))
-        
-        q1_q2_fw_state, _ = q1_q2_fw.max(dim=1)
-        q1_q2_bw_state, _ = q1_q2_bw.max(dim=1)
-        q2_q1_fw_state, _ = q2_q1_fw.max(dim=1)
-        q2_q1_bw_state, _ = q2_q1_bw.max(dim=1)
-        agg_representations.append(q1_q2_fw_state), agg_representations.append(q1_q2_bw_state), agg_representations.append(q2_q1_fw_state),\
-        agg_representations.append(q2_q1_bw_state)
-        agg_rep = torch.cat(agg_representations, dim=1)
-        regroup_results = self.dense_rep_dropout(F.tanh(self.agg_rep_later(agg_rep)))
-        y = self.predict_layer(regroup_results)
+        y = torch.cat([q1_q2_rep, q2_q1_rep], dim=-1)
+        y = self.helper_layer(y)
+        y, _ = y.max(dim=1)
         return y
+        # q1_q2_fw, q1_q2_bw = self._handle_lstm(q1_q2_rep, q1_len, self.matching_pools_bilstm, self.decoder_lstm_dropout, 100)
+        # q2_q1_fw, q2_q1_bw = self._handle_lstm(q2_q1_rep, q2_len, self.matching_pools_bilstm, self.decoder_lstm_dropout, 100)
+        
+        # q1_q2_mask = torch.arange(self.max_len, device=q1_q2_fw.device).unsqueeze(0) < q1_len.unsqueeze(1)
+        # q1_q2_mask = q1_q2_mask.unsqueeze(-1) 
+        # q1_q2_fw = q1_q2_fw.masked_fill(~q1_q2_mask, float('-inf'))
+        # q1_q2_bw = q1_q2_bw.masked_fill(~q1_q2_mask, float('-inf'))
+        
+        # q2_q1_mask = torch.arange(self.max_len, device=q2_q1_fw.device).unsqueeze(0) < q2_len.unsqueeze(1)
+        # q2_q1_mask = q2_q1_mask.unsqueeze(-1)
+        # q2_q1_fw = q2_q1_fw.masked_fill(~q2_q1_mask, float('-inf'))
+        # q2_q1_bw = q2_q1_bw.masked_fill(~q2_q1_mask, float('-inf'))
+        
+        # q1_q2_fw_state, _ = q1_q2_fw.max(dim=1)
+        # q1_q2_bw_state, _ = q1_q2_bw.max(dim=1)
+        # q2_q1_fw_state, _ = q2_q1_fw.max(dim=1)
+        # q2_q1_bw_state, _ = q2_q1_bw.max(dim=1)
+        # agg_representations.append(q1_q2_fw_state), agg_representations.append(q1_q2_bw_state), agg_representations.append(q2_q1_fw_state),\
+        # agg_representations.append(q2_q1_bw_state)
+        # agg_rep = torch.cat(agg_representations, dim=1)
+        # regroup_results = self.dense_rep_dropout(F.tanh(self.agg_rep_later(agg_rep)))
+        # y = self.predict_layer(regroup_results)
+        # if return_embedding:
+        #     preds = F.sigmoid(y)
+        #     output = torch.cat([preds, regroup_results], dim=-1)
+        #     return y, output
+        # else:
+        #     return y
     
     def _handle_lstm(self, x, x_len, lstm_func, dropout_func, split_size):
         x = pack_padded_sequence(x, x_len.cpu(), batch_first=True, enforce_sorted=False)
@@ -124,7 +136,6 @@ class BiMPM(nn.Module):
         
         q1_fw, q1_bw = self._handle_lstm(q1_emb, q1_lengths, self.contextual_bilstm, self.encoder_lstm_dropout, self.hidden_size)
         q2_fw, q2_bw = self._handle_lstm(q2_emb, q2_lengths, self.contextual_bilstm, self.encoder_lstm_dropout, self.hidden_size)
-        
         max_len = q1_fw.shape[1]
         actual_q1_len = q1_lengths[:, None]
         actual_q2_len = q2_lengths[:, None]
@@ -132,6 +143,7 @@ class BiMPM(nn.Module):
         mask1 = ref_len < actual_q1_len
         mask2 = ref_len < actual_q2_len
         mask = mask1[:, :, None] * mask2[:, None]
+        mask2 = mask2[:, None].float()
         
         batch_idx = torch.arange(q1_lengths.shape[0])
         batch_idx = batch_idx[:,None].to(self.device)
@@ -145,13 +157,14 @@ class BiMPM(nn.Module):
         matches.append(fw_full_matching)
         matches.append(bw_full_matching)
 
-        fw_pool_matching = self._pooling_matching(q1_fw, q2_fw, q2_lengths)
-        bw_pool_matching = self._pooling_matching(q1_bw, q2_bw, q2_lengths)
+        fw_pool_matching = self._pooling_matching(q1_fw, q2_fw, mask2)
+        bw_pool_matching = self._pooling_matching(q1_bw, q2_bw, mask2)
         matches.append(fw_pool_matching)
         matches.append(bw_pool_matching)
+        return matches
 
-        fw_cosine_attn = self._cosine_attn(q1_fw, q2_fw, q2_lengths, mask)
-        bw_cosine_attn = self._cosine_attn(q1_bw, q2_bw, q2_lengths, mask)
+        fw_cosine_attn = self._cosine_attn(q1_fw, q2_fw, mask2, mask)
+        bw_cosine_attn = self._cosine_attn(q1_bw, q2_bw, mask2, mask)
         fw_cosine_sim = self._weight_sent_by_attn(q2_fw, fw_cosine_attn)
         bw_cosine_sim = self._weight_sent_by_attn(q2_bw, bw_cosine_attn)
         fw_cosine_matching = self._attentive_matching(q1_fw, fw_cosine_sim, self.attentive_matching_weights)
@@ -160,22 +173,22 @@ class BiMPM(nn.Module):
         bw_cosine_max_att_matching = self._max_attentive_matching(q1_bw, q2_bw, bw_cosine_attn)
         
         if self.multi_attn_head:
-            fw_multiplicative_attn = self._multiplicative_attn(q1_fw, q2_fw, q2_lengths, mask)
-            bw_multiplicative_attn = self._multiplicative_attn(q1_bw, q2_bw, q2_lengths, mask)
+            fw_multiplicative_attn = self._multiplicative_attn(q1_fw, q2_fw, mask2.float(), mask)
+            bw_multiplicative_attn = self._multiplicative_attn(q1_bw, q2_bw, mask2.float(), mask)
             fw_multiplicative_sim = self._weight_sent_by_attn(q2_fw, fw_multiplicative_attn)
             bw_multiplicative_sim = self._weight_sent_by_attn(q2_bw, bw_multiplicative_attn)
             fw_multiplicative_matching = self._attentive_matching(q1_fw, fw_multiplicative_sim, self.attentive_matching_weights)
             bw_multiplicative_matching = self._attentive_matching(q1_bw, bw_multiplicative_sim, self.attentive_matching_weights)
             
-            fw_additive_attn = self._additive_attn(q1_fw, q2_fw, q2_lengths, mask)
-            bw_additive_attn = self._additive_attn(q1_bw, q2_bw, q2_lengths, mask)
+            fw_additive_attn = self._additive_attn(q1_fw, q2_fw, mask2.float(), mask)
+            bw_additive_attn = self._additive_attn(q1_bw, q2_bw, mask2.float(), mask)
             fw_additive_sim = self._weight_sent_by_attn(q2_fw, fw_additive_attn)
             bw_additive_sim = self._weight_sent_by_attn(q2_bw, bw_additive_attn)
             fw_additive_matching = self._attentive_matching(q1_fw, fw_additive_sim, self.attentive_matching_weights)
             bw_additive_matching = self._attentive_matching(q1_bw, bw_additive_sim, self.attentive_matching_weights)
             
-            fw_concat_attn = self._concat_attn(q1_fw, q2_fw, q2_lengths, mask)
-            bw_concat_attn = self._concat_attn(q1_bw, q2_bw, q2_lengths, mask)
+            fw_concat_attn = self._concat_attn(q1_fw, q2_fw, mask2.float(), mask)
+            bw_concat_attn = self._concat_attn(q1_bw, q2_bw, mask2.float(), mask)
             fw_concat_sim = self._weight_sent_by_attn(q2_fw, fw_concat_attn)
             bw_concat_sim = self._weight_sent_by_attn(q2_bw, bw_concat_attn)
             fw_concat_matching = self._attentive_matching(q1_fw, fw_concat_sim, self.attentive_matching_weights)
@@ -188,10 +201,8 @@ class BiMPM(nn.Module):
             fw_attentive_matching = self.multi_mp_compression(fw_attentive_matching)
             bw_attentive_matching = self.multi_mp_compression(bw_attentive_matching)
             
-            fw_max_attn = torch.stack([fw_cosine_attn, fw_multiplicative_attn,
-                fw_additive_attn,fw_concat_attn], dim=-1)
-            bw_max_attn = torch.stack([bw_cosine_attn, bw_multiplicative_attn,
-                bw_additive_attn, bw_concat_attn], dim=-1)
+            fw_max_attn = torch.stack([fw_cosine_attn, fw_multiplicative_attn, fw_additive_attn,fw_concat_attn], dim=-1)
+            bw_max_attn = torch.stack([bw_cosine_attn, bw_multiplicative_attn, bw_additive_attn, bw_concat_attn], dim=-1)
             fw_max_att_score = self.multi_attentive_head(fw_max_attn).squeeze(dim=-1)
             bw_max_att_score = self.multi_attentive_head(bw_max_attn).squeeze(dim=-1)
             neg_inf = torch.finfo(fw_max_att_score.dtype).min
@@ -211,11 +222,11 @@ class BiMPM(nn.Module):
         matches.append(fw_max_att_matching), matches.append(bw_max_att_matching)
         return matches
     
-    def _cosine_attn(self, x1, x2, x2_len, pad_mask):
+    def _cosine_attn(self, x1, x2, mask, pad_mask):
         x1 = x1[:, :, None]
         x2 = x2[:, None]
         logits = self._cosine_similarity(x1, x2)
-        attn = self._post_attn_process(logits, x2_len, pad_mask)
+        attn = self._post_attn_process(logits, mask, pad_mask)
         return attn
     
     def _cosine_similarity(self, x1, x2):
@@ -226,19 +237,26 @@ class BiMPM(nn.Module):
         cosine_similarity = cosine_numerator / cosine_denominator
         return cosine_similarity
     
+    # def _mul_weights(self, x, weights, dim='1D'):
+    #     assert dim in ['1D', '2D']
+    #     if dim == '2D':
+    #         x = x.reshape(-1, x.shape[-1])
+    #     x = x[:, None]
+    #     weights = weights[None]
+    #     mul_x = x * weights
+    #     return mul_x
+    
     def _mul_weights(self, x, weights, dim='1D'):
         assert dim in ['1D', '2D']
-        if dim == '2D':
-            x = x.reshape(-1, x.shape[-1])
-        x = x[:, None]
-        weights = weights[None]
-        mul_x = x * weights
-        return mul_x
+        if dim == '1D':
+            x = x[:, None]
+            weights = weights.view(1, self.mp_dim, self.hidden_size)
+        else:
+            x = x[:, :, None]
+            weights = weights.view(1, 1, self.mp_dim, self.hidden_size)
+        return x * weights
     
-    def _post_attn_process(self, logits, x2_len, pad_mask):
-        ref_len = torch.arange(self.max_len)[None].to(self.device)
-        mask = ref_len < x2_len[:, None]
-        mask = mask[:, None].float()        
+    def _post_attn_process(self, logits, mask, pad_mask):    
         logits = mask * logits + (1 - mask) * 1e-9
         logits = logits - torch.max(logits, dim=-1, keepdim=True)[0]
         attn = torch.exp(logits)
@@ -246,30 +264,30 @@ class BiMPM(nn.Module):
         attn = attn / (torch.sum(attn, dim=-1, keepdim=True) + 1e-6)
         return attn
     
-    def _multiplicative_attn(self, x1, x2, x2_len, pad_mask):
+    def _multiplicative_attn(self, x1, x2, mask, pad_mask):
         x1 = self.multiplicative_linear(x1)
         x2 = self.multiplicative_linear(x2)
         logits = torch.matmul(x1, x2.transpose(1, 2))
-        attn = self._post_attn_process(logits, x2_len, pad_mask)
+        attn = self._post_attn_process(logits, mask, pad_mask)
         return attn
     
-    def _additive_attn(self, x1, x2, x2_len, pad_mask):
+    def _additive_attn(self, x1, x2, mask, pad_mask):
         x1 = self.additive_linear(x1)
         x2 = self.additive_linear(x2)
         x1 = x1[:, :, None]
         x2 = x2[:, None]
         logits = F.tanh(x1 + x2)
         logits = torch.sum(self.additive_dot_weights * logits, dim=-1)
-        attn = self._post_attn_process(logits, x2_len, pad_mask)
+        attn = self._post_attn_process(logits, mask, pad_mask)
         return attn
     
-    def _concat_attn(self, x1, x2, x2_len, pad_mask):
+    def _concat_attn(self, x1, x2, mask, pad_mask):
         x1 = torch.tile(x1[:, :, None], (1, 1, self.max_len, 1))
         x2 = torch.tile(x2[:, None], (1, self.max_len, 1, 1))
         x = torch.concat([x1 ,x2], dim=-1)
         x = self.concat_linear(x)
         logits = torch.sum(x * self.concat_dot_weights, dim=-1)
-        attn = self._post_attn_process(logits, x2_len, pad_mask)
+        attn = self._post_attn_process(logits, mask, pad_mask)
         return attn
     
     def _weight_sent_by_attn(self, x, attn_mat):
@@ -286,17 +304,31 @@ class BiMPM(nn.Module):
         word_to_sent_perspective = self._cosine_similarity(q1_rep, q2_rep)
         return word_to_sent_perspective
     
-    def _pooling_matching(self, x1, x2, x2_len):
+    # def _pooling_matching(self, x1, x2, mask2):
+    #     q1_rep = self._mul_weights(x1, self.pool_matching_weights, dim='2D')
+    #     q2_rep = self._mul_weights(x2, self.pool_matching_weights, dim='2D')
+    #     q1_rep = q1_rep.reshape(x1.shape[0], -1, self.mp_dim, self.hidden_size)
+    #     q2_rep = q2_rep.reshape(x1.shape[0], -1, self.mp_dim, self.hidden_size)
+    #     q1_rep = q1_rep[:, :, None]
+    #     q2_rep = q2_rep[:, None]
+    #     word_to_word_perspective = self._cosine_similarity(q1_rep, q2_rep)      
+    #     mask2 = mask2.unsqueeze(-1)
+    #     masked = word_to_word_perspective * mask2
+    #     denom = mask2.sum(dim=2, keepdim=True).clamp(min=1)  # avoid /0
+    #     pooled = masked.sum(dim=2) / denom.squeeze(2)
+    #     return pooled
+    
+    def _pooling_matching(self, x1, x2, mask2):
         q1_rep = self._mul_weights(x1, self.pool_matching_weights, dim='2D')
         q2_rep = self._mul_weights(x2, self.pool_matching_weights, dim='2D')
-        q1_rep = q1_rep.reshape(x1.shape[0], -1, self.mp_dim, self.hidden_size)
-        q2_rep = q2_rep.reshape(x1.shape[0], -1, self.mp_dim, self.hidden_size)
-        q1_rep = q1_rep[:, :, None]
-        q2_rep = q2_rep[:, None]
-        word_to_word_perspective = self._cosine_similarity(q1_rep, q2_rep)
-        mask2 = (torch.arange(word_to_word_perspective.shape[2], device=x2.device).unsqueeze(0) < x2_len.unsqueeze(1))  # (B, T2)
-        mask2 = mask2.unsqueeze(1).unsqueeze(-1)  # (B, 1, T2, 1)
-        masked = word_to_word_perspective * mask2
+        q1_rep = F.normalize(q1_rep, p=2, dim=-1)
+        q2_rep = F.normalize(q2_rep, p=2, dim=-1)
+        q1_rep = q1_rep.permute(0, 2, 1, 3)
+        q2_rep = q2_rep.permute(0, 2, 3, 1)
+        sims = torch.matmul(q1_rep, q2_rep)
+        sims = sims.permute(0, 2, 3, 1)
+        mask2 = mask2.unsqueeze(-1)
+        masked = sims * mask2
         denom = mask2.sum(dim=2, keepdim=True).clamp(min=1)  # avoid /0
         pooled = masked.sum(dim=2) / denom.squeeze(2)
         return pooled

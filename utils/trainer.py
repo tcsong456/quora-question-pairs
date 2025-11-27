@@ -79,9 +79,6 @@ class Trainer:
         self.warm_start = warm_start
         os.makedirs('checkpoints', exist_ok=True)
         self.loss_fn = nn.BCEWithLogitsLoss()
-        self.start_epoch = 0
-        self.best_loss = np.inf
-        self.bad_epoch = 0
         self.early_stopping = early_stopping
     
     def train(self, fold):
@@ -89,13 +86,16 @@ class Trainer:
         optimizer = self.optimizers[fold]
         lr_scheduler = self.schedulers[fold]
         checkpoint_path = f'checkpoints/bimpm_{fold}.pth'
+        best_loss = np.inf
+        bad_epoch = 0
+        start_epoch = 0
         if self.warm_start:
             ckpt = torch.load(checkpoint_path)
             model.load_state_dict(ckpt['model'])
             optimizer.load_state_dict(ckpt['optimizer'])
             lr_scheduler.load_state_dict(ckpt['lr_scheduler'])
-            self.start_epoch = ckpt['epoch']
-            self.best_loss = ckpt['best_loss']
+            start_epoch = ckpt['epoch']
+            best_loss = ckpt['best_loss']
             
         scaler = GradScaler(enabled=self.amp)
         train_idx = self.data_train[fold]
@@ -121,7 +121,7 @@ class Trainer:
             batch_size=512
           )
         
-        for epoch in range(self.start_epoch, self.epochs):
+        for epoch in range(start_epoch, self.epochs):
             model.train()
             train_dl = tqdm(train_dataloader,
                             total=len(train_dataloader),
@@ -149,42 +149,51 @@ class Trainer:
                     } 
                   )
 
-            val_dl = tqdm(val_dataloader,
-                          total=len(val_dataloader),
-                          desc=f'running fold {fold} in evaluation')
-            with torch.no_grad():
-                model.eval()
-                for batch in val_dl:
-                    for i, v in enumerate(batch):
-                        if isinstance(v, torch.Tensor):
-                            batch[i] = v.to(self.device)
+            # val_dl = tqdm(val_dataloader,
+            #               total=len(val_dataloader),
+            #               desc=f'running fold {fold} in evaluation')
+            # features,ids = [], []
+            # with torch.no_grad():
+            #     model.eval()
+            #     for batch in val_dl:
+            #         for i, v in enumerate(batch):
+            #             if isinstance(v, torch.Tensor):
+            #                 batch[i] = v.to(self.device)
                 
-                    yt = batch[-1]
-                    with autocast(enabled=self.amp):
-                        yp = model(batch)
-                        val_loss = self.loss_fn(yp.view(-1), yt.float())
-                    loss_meter_val.update(val_loss, 1)
-                    val_loss = loss_meter_val.average
-                    val_dl.set_postfix({
-                        f'epoch {epoch} loss': f'{val_loss: .5f}'
-                      })
-                lr_scheduler.step(val_loss)
+            #         yt = batch[-1]
+            #         with autocast(enabled=self.amp):
+            #             yp, feature = model(batch, return_embedding=True)
+            #             val_loss = self.loss_fn(yp.view(-1), yt.float())
+            #             features.append(feature)
+            #         id = batch[0].cpu().numpy()
+            #         ids.append(id)
+            #         loss_meter_val.update(val_loss, 1)
+            #         val_loss = loss_meter_val.average
+            #         val_dl.set_postfix({
+            #             f'epoch {epoch} loss': f'{val_loss: .5f}'
+            #           })
+            #     lr_scheduler.step(val_loss)
                 
-                if val_loss <  self.best_loss:
-                    self.best_loss = val_loss
-                    self.bad_epoch = 0
-                    torch.save({
-                        'model': model.state_dict(),
-                        'optimizer': optimizer.state_dict(),
-                        'lr_scheduler': lr_scheduler.state_dict(),
-                        'best_loss': self.best_loss,
-                        'epoch': epoch
-                      }, checkpoint_path)
-                else:
-                    self.bad_epoch += 1
-            if self.bad_epoch == self.early_stopping:
-                print(f'early stopping reaches at epoch: {epoch}')
-                break
+            #     if val_loss <  best_loss:
+            #         best_loss = val_loss
+            #         bad_epoch = 0
+            #         torch.save({
+            #             'model': model.state_dict(),
+            #             'optimizer': optimizer.state_dict(),
+            #             'lr_scheduler': lr_scheduler.state_dict(),
+            #             'best_loss': best_loss,
+            #             'epoch': epoch
+            #           }, checkpoint_path)
+            #         ids = np.concatenate(ids)
+            #         features = torch.cat(features,dim=0)
+            #         features = features.detach().cpu().numpy()
+            #         features = np.concatenate([ids[:, None], features], axis=1)
+            #         np.save(f'artifacts/bimpm_features_{fold}.npy', features)
+            #     else:
+            #         bad_epoch += 1
+            # if bad_epoch == self.early_stopping:
+            #     print(f'early stopping reaches at epoch: {epoch}')
+            #     break
 
 if __name__ == '__main__':
     bv = BuildVocab('data/train.csv',
@@ -195,11 +204,13 @@ if __name__ == '__main__':
         vec_model=vec_model,
         amp=True,
         warm_start=False,
-        early_stopping=3
+        early_stopping=3,
+        epochs=100,
       )
     for fold in range(5):
         trainer.train(fold)
     
   #%%
+
 
 
