@@ -31,6 +31,7 @@ important_points.py
 data/*
 artifacts/*
 test.py
+checkpoints/*
 
 # PyInstaller
 #  Usually these files are written by a python script from a template

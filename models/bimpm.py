@@ -181,13 +181,6 @@ class BiMPM(nn.Module):
             fw_concat_matching = self._attentive_matching(q1_fw, fw_concat_sim, self.attentive_matching_weights)
             bw_concat_matching = self._attentive_matching(q1_bw, bw_concat_sim, self.attentive_matching_weights)
             
-            # fw_attentive_matching = torch.stack([fw_cosine_matching, fw_multiplicative_matching,
-            #                                      fw_additive_matching, fw_concat_matching], dim=-1)
-            # bw_attentive_matching = torch.stack([bw_cosine_matching, bw_amultiplicative_matching,
-            #                                      bw_aadditive_matching, bw_concat_matching], dim=-1)
-            # fw_attentive_matching = self.multi_attentive_head(fw_attentive_matching).squeeze(dim=-1)
-            # bw_attentive_matching = self.multi_attentive_head(bw_attentive_matching).squeeze(dim=-1)
-            
             fw_attentive_matching = torch.cat([fw_cosine_matching, fw_multiplicative_matching,
                                                  fw_additive_matching, fw_concat_matching], dim=-1)
             bw_attentive_matching = torch.cat([bw_cosine_matching, bw_multiplicative_matching,
