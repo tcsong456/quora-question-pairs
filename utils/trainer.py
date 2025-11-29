@@ -1,5 +1,6 @@
 import os
 import torch
+import argparse
 import warnings
 warnings.filterwarnings(action='ignore')
 import numpy as np
@@ -33,11 +34,12 @@ class Trainer:
                  vocab,
                  vec_model,
                  epochs=50,
-                 warm_start=False,
                  amp=True,
+                 model_name='bimpm',
                  use_mul_head_attn=False,
                  early_stopping=1):
         train = vocab.train_data
+        test = vocab.test_data
         words_index_dict = vocab.load_dict()
         self.words_index_dict = words_index_dict
         device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
@@ -67,17 +69,9 @@ class Trainer:
                         ).to(device)
             optimizer = optim.Adam(model.parameters(),
                                    lr=0.002)
-            lr_scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-                  optimizer,
-                  factor=0.1,
-                  patience=1,
-                  mode='min'
-                )
             self.optimizers.append(optimizer)
             self.models.append(model)
-            self.schedulers.append(lr_scheduler)
-        
-        self.warm_start = warm_start
+            
         os.makedirs('checkpoints', exist_ok=True)
         self.loss_fn = nn.BCEWithLogitsLoss()
         self.early_stopping = early_stopping
@@ -86,20 +80,20 @@ class Trainer:
         else:
             suffix = ''
         self.suffix = suffix
+        self.model_name = model_name
+        self.test = test
     
-    def train(self, fold):
+    def train(self, fold, warm_start=False):
         model = self.models[fold]
         optimizer = self.optimizers[fold]
-        lr_scheduler = self.schedulers[fold]
-        checkpoint_path = f'checkpoints/bimpm_{fold}{self.suffix}.pth'
+        checkpoint_path = f'checkpoints/{self.model_name}_{fold}{self.suffix}.pth'
         best_loss = np.inf
         bad_epoch = 0
         start_epoch = 0
-        if self.warm_start:
+        if warm_start:
             ckpt = torch.load(checkpoint_path)
             model.load_state_dict(ckpt['model'])
             optimizer.load_state_dict(ckpt['optimizer'])
-            lr_scheduler.load_state_dict(ckpt['lr_scheduler'])
             start_epoch = ckpt['epoch']
             best_loss = ckpt['best_loss']
             
@@ -109,7 +103,6 @@ class Trainer:
         loss_meter_tr = AverageMeter()
         loss_meter_val = AverageMeter()
         
-        current_lr = optimizer.param_groups[0]['lr']
         train_dataset = QQPDataset(bv=self.vocab,
                                    q_idx=train_idx,
                                    mode='train')
@@ -127,8 +120,10 @@ class Trainer:
             batch_size=512
           )
         
+        os.makedirs('artifacts/training', exist_ok=True)
         for epoch in range(start_epoch, self.epochs):
             model.train()
+            current_lr = optimizer.param_groups[0]['lr']
             train_dl = tqdm(train_dataloader,
                             total=len(train_dataloader),
                             desc=f'running fold {fold} in training')
@@ -158,9 +153,9 @@ class Trainer:
             val_dl = tqdm(val_dataloader,
                           total=len(val_dataloader),
                           desc=f'running fold {fold} in evaluation')
-            features,ids = [], []
             with torch.no_grad():
                 model.eval()
+                features,ids = [], []
                 for batch in val_dl:
                     for i, v in enumerate(batch):
                         if isinstance(v, torch.Tensor):
@@ -178,7 +173,6 @@ class Trainer:
                     val_dl.set_postfix({
                         f'epoch {epoch} loss': f'{val_loss: .5f}'
                       })
-                lr_scheduler.step(val_loss)
                 
                 if val_loss <  best_loss:
                     best_loss = val_loss
@@ -186,7 +180,6 @@ class Trainer:
                     torch.save({
                         'model': model.state_dict(),
                         'optimizer': optimizer.state_dict(),
-                        'lr_scheduler': lr_scheduler.state_dict(),
                         'best_loss': best_loss,
                         'epoch': epoch
                       }, checkpoint_path)
@@ -194,31 +187,104 @@ class Trainer:
                     features = torch.cat(features,dim=0)
                     features = features.detach().cpu().numpy()
                     features = np.concatenate([ids[:, None], features], axis=1)
-                    np.save(f'artifacts/bimpm_features_{fold}{self.suffix}.npy', features)
+                    np.save(f'artifacts/training/{self.model_name}_features_{fold}{self.suffix}.npy', features)
                 else:
                     bad_epoch += 1
             if bad_epoch == self.early_stopping:
                 print(f'early stopping reaches at epoch: {epoch}')
                 break
+    
+    @torch.no_grad()
+    def predict(self):
+        os.makedirs('artifacts/predictions', exist_ok=True)
+        for i in range(5):
+            checkpoint = f'checkpoints/{self.model_name}_{i}{self.suffix}.pth'
+            model = self.models[i]
+            ckpt = torch.load(checkpoint)
+            model.load_state_dict(ckpt['model'])
+            
+            test_index = np.arange(len(self.test))
+            test_dataset = QQPDataset(
+                bv=self.vocab,
+                q_idx=test_index,
+                mode='test'
+              )
+            test_dataloader = DataLoader(
+                test_dataset,
+                shuffle=False,
+                batch_size=512
+              )
+            test_dl = tqdm(test_dataloader,
+                          total=len(test_dataloader),
+                          desc=f'predicting fold {i}')
+            
+            model.eval()
+            ids, features = [], []
+            for batch in test_dl:
+                for i, v in enumerate(batch):
+                    if isinstance(v, torch.Tensor):
+                        batch[i] = v.to(self.device)
+                with autocast(enabled=self.amp):
+                    _, feature = model(batch, return_embedding=True)
+                    features.append(feature)
+                id = batch[0].cpu().numpy()
+                ids.append(id)
+            ids = np.concatenate(ids)
+            features = torch.cat(features,dim=0)
+            features = features.detach().cpu().numpy()
+            features = np.concatenate([ids[:, None], features], axis=1)
+            np.save(f'artifacts/predictions/{self.model_name}_features_{i}{self.suffix}.npy', features)
+
+def parse_args():
+    def int_list(arg):
+        arg = arg.strip("[]")
+        return [int(x) for x in arg.split(",") if x.strip()]
+    
+    def binary_list(arg):
+        nums = []
+        lst = int_list(arg)
+        for v in lst:
+            if v not in [0, 1]:
+                raise argparse.ArgumentTypeError("Values must be 0 or 1.")
+            nums.append(v)
+        return nums
+  
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--amp', action='store_true')
+    parser.add_argument('--warm-start-folds', type=binary_list)
+    parser.add_argument('--model-name', type=str, default='none')
+    parser.add_argument('--epochs', type=int, default=50)
+    parser.add_argument('--early-stopping', type=int, default=3)
+    parser.add_argument('--use-multi-head-attn', action='store_true')
+    parser.add_argument('--training-folds', type=int_list)
+    args = parser.parse_args()
+    return args
 
 if __name__ == '__main__':
+    args = parse_args()
     bv = BuildVocab('data/train.csv',
                     'data/test.csv')
     vec_model = load_facebook_model('artifacts/cc.en.300.bin')
     trainer = Trainer(
         vocab=bv,
         vec_model=vec_model,
-        amp=True,
-        warm_start=False,
-        early_stopping=3,
-        epochs=100,
-        use_mul_head_attn=False,
+        amp=args.amp,
+        model_name=args.model_name,
+        early_stopping=args.early_stopping,
+        epochs=args.epochs,
+        use_mul_head_attn=args.use_multi_head_attn
       )
-    for fold in range(5):
-        trainer.train(fold)
+    # for fold, warm_start in zip(args.training_folds, args.warm_start_folds):
+        # trainer.train(fold, warm_start=warm_start)
+    trainer.predict()
     
   #%%
-
-
-
+# import numpy as np
+# import torch
+# x = np.load('artifacts/bimpm_features_0_multi_head.npy')
+# ckpt = torch.load('checkpoints/bimpm_3_multi_head.pth')
+# ckpt['best_loss']
+# import pandas as pd
+# test = pd.read_csv('data/test.csv')
+# np.arange(test.shape[0])
 

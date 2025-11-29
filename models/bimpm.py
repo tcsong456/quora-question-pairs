@@ -4,6 +4,14 @@ from torch import nn
 from torch.nn import functional as F
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
+class VariationalDropout(nn.Dropout):
+    def forward(self, batch):
+        ones = batch.data.new_ones(batch.shape[0],
+                                   batch.shape[-1])
+        dropout_mask = nn.functional.dropout(ones, self.p, self.training, inplace=False)
+        masked_output = dropout_mask[:, None] * batch
+        return masked_output
+
 class BiMPM(nn.Module):
     def __init__(self,
                  emb_dim,
@@ -47,11 +55,11 @@ class BiMPM(nn.Module):
             bidirectional=True,
             num_layers=1
           )
-        self.word_emb_dropout = nn.Dropout(0.1)
-        self.encoder_lstm_dropout = nn.Dropout(0.2)
-        self.matching_layer_dropout = nn.Dropout(0.3)
-        self.decoder_lstm_dropout = nn.Dropout(0.2)
-        self.dense_rep_dropout = nn.Dropout(0.25)
+        self.word_emb_dropout = VariationalDropout(p=0.025)
+        self.encoder_lstm_dropout = nn.Dropout(0.05)
+        self.matching_layer_dropout = nn.Dropout(0.075)
+        self.decoder_lstm_dropout = nn.Dropout(0.05)
+        self.dense_rep_dropout = nn.Dropout(0.075)
         
         self.full_matching_weights = nn.Parameter(torch.empty(mp_dim, hidden_size))
         nn.init.xavier_uniform_(self.full_matching_weights)
@@ -266,35 +274,12 @@ class BiMPM(nn.Module):
         attn = self._post_attn_process(logits, mask, pad_mask)
         return attn
     
-    # def _concat_attn(self, x1, x2, mask, pad_mask):
-    #     x1 = torch.tile(x1[:, :, None], (1, 1, self.max_len, 1))
-    #     x2 = torch.tile(x2[:, None], (1, self.max_len, 1, 1))
-    #     x = torch.concat([x1 ,x2], dim=-1)
-    #     x = self.concat_linear(x)
-    #     logits = torch.sum(x * self.concat_dot_weights, dim=-1)
-    #     attn = self._post_attn_process(logits, mask, pad_mask)
-    #     return attn
-    
     def _concat_attn(self, x1, x2, mask, pad_mask):
-        B, T1, H = x1.shape
-        _, T2, H2 = x2.shape
-        assert H == H2
-    
-        W = self.concat_linear.weight
-        v = self.concat_dot_weights.view(-1)
-    
-        u = torch.matmul(W.t(), v)
-        u1, u2 = torch.split(u, H, dim=0)
-    
-        b = self.concat_linear.bias
-        if b is not None:
-            c = torch.sum(b * v)
-        else:
-            c = 0.0
-    
-        s1 = torch.matmul(x1, u1)
-        s2 = torch.matmul(x2, u2)
-        logits = s1.unsqueeze(2) + s2.unsqueeze(1) + c
+        x1 = torch.tile(x1[:, :, None], (1, 1, self.max_len, 1))
+        x2 = torch.tile(x2[:, None], (1, self.max_len, 1, 1))
+        x = torch.concat([x1 ,x2], dim=-1)
+        x = self.concat_linear(x)
+        logits = torch.sum(x * self.concat_dot_weights, dim=-1)
         attn = self._post_attn_process(logits, mask, pad_mask)
         return attn
     

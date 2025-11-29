@@ -41,7 +41,7 @@ class QQPDataset(Dataset):
             y = row[-1]
             return id, q1, q2, q1_len, q2_len, y
         else:
-            return id, q1, q2, q1_len, q2_len
+            return int(id), q1, q2, q1_len, q2_len
         
 
 #%%
