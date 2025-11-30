@@ -1,7 +1,4 @@
-import spacy
-import torch
 from torch.utils.data import Dataset
-from utils.build_vocab import BuildVocab
 
 class QQPDataset(Dataset):
     def __init__(self,
@@ -41,7 +38,7 @@ class QQPDataset(Dataset):
             y = row[-1]
             return id, q1, q2, q1_len, q2_len, y
         else:
-            return int(id), q1, q2, q1_len, q2_len
+            return id, q1, q2, q1_len, q2_len
         
 
 #%%

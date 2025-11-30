@@ -15,6 +15,8 @@ class BuildVocab:
         test = pd.read_csv(test_path)
         train = self._mask_data(train)
         test = self._mask_data(test)
+        test['test_id'] = test['test_id'].map(int)
+        test = test.drop_duplicates('test_id')
         self.train_data = train
         self.test_data = test
         self.words_index = {}
@@ -122,4 +124,3 @@ if __name__ == '__main__':
     build_vocab.convert_sent_to_index()
 
 #%%
-

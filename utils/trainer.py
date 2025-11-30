@@ -187,7 +187,7 @@ class Trainer:
                     features = torch.cat(features,dim=0)
                     features = features.detach().cpu().numpy()
                     features = np.concatenate([ids[:, None], features], axis=1)
-                    np.save(f'artifacts/training/{self.model_name}_features_{fold}{self.suffix}.npy', features)
+                    np.save(f'artifacts/training/{self.model_name}_features_{fold}{self.suffix}.npy', features.astype(np.float32))
                 else:
                     bad_epoch += 1
             if bad_epoch == self.early_stopping:
@@ -197,9 +197,9 @@ class Trainer:
     @torch.no_grad()
     def predict(self):
         os.makedirs('artifacts/predictions', exist_ok=True)
-        for i in range(5):
-            checkpoint = f'checkpoints/{self.model_name}_{i}{self.suffix}.pth'
-            model = self.models[i]
+        for fold in range(5):
+            checkpoint = f'checkpoints/{self.model_name}_{fold}{self.suffix}.pth'
+            model = self.models[fold]
             ckpt = torch.load(checkpoint)
             model.load_state_dict(ckpt['model'])
             
@@ -216,7 +216,7 @@ class Trainer:
               )
             test_dl = tqdm(test_dataloader,
                           total=len(test_dataloader),
-                          desc=f'predicting fold {i}')
+                          desc=f'predicting fold {fold}')
             
             model.eval()
             ids, features = [], []
@@ -233,7 +233,31 @@ class Trainer:
             features = torch.cat(features,dim=0)
             features = features.detach().cpu().numpy()
             features = np.concatenate([ids[:, None], features], axis=1)
-            np.save(f'artifacts/predictions/{self.model_name}_features_{i}{self.suffix}.npy', features)
+            np.save(f'artifacts/predictions/{self.model_name}_features_{fold}{self.suffix}.npy', features.astype(np.float32))
+      
+    def merge(self):
+        train_feats = []
+        for fold in range(5):
+            prediction_path = f'artifacts/predictions/{self.model_name}_features_{fold}{self.suffix}.npy'
+            train_path = f'artifacts/training/{self.model_name}_features_{fold}{self.suffix}.npy'
+            test_features = np.load(prediction_path)
+            train_features = np.load(train_path)
+            if fold == 0:
+                total_features = np.zeros([*test_features.shape], dtype=np.float32)
+            total_features += test_features
+            train_feats.append(train_features.astype(np.float32))
+            os.remove(prediction_path)
+            os.remove(train_path)
+            
+        total_features /= 5
+        train_features = np.concatenate(train_feats, axis=0)
+        sorted_index = train_features[:, 0].argsort()
+        train_features = train_features[sorted_index]
+        sorted_index = total_features[:, 0].argsort()
+        test_features = total_features[sorted_index]
+        
+        np.save(f'artifacts/training/{self.model_name}_features{self.suffix}.npy', train_features)
+        np.save(f'artifacts/predictions/{self.model_name}_features{self.suffix}.npy', total_features)
 
 def parse_args():
     def int_list(arg):
@@ -269,22 +293,16 @@ if __name__ == '__main__':
         vocab=bv,
         vec_model=vec_model,
         amp=args.amp,
-        model_name=args.model_name,
+        # model_name=args.model_name,
+        model_name='bimpm',
         early_stopping=args.early_stopping,
         epochs=args.epochs,
-        use_mul_head_attn=args.use_multi_head_attn
+        # use_mul_head_attn=args.use_multi_head_attn
+        use_mul_head_attn=True
       )
     # for fold, warm_start in zip(args.training_folds, args.warm_start_folds):
         # trainer.train(fold, warm_start=warm_start)
-    trainer.predict()
+    # trainer.predict()
+    trainer.merge()
     
   #%%
-# import numpy as np
-# import torch
-# x = np.load('artifacts/bimpm_features_0_multi_head.npy')
-# ckpt = torch.load('checkpoints/bimpm_3_multi_head.pth')
-# ckpt['best_loss']
-# import pandas as pd
-# test = pd.read_csv('data/test.csv')
-# np.arange(test.shape[0])
-
