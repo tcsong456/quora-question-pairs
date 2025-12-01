@@ -293,16 +293,14 @@ if __name__ == '__main__':
         vocab=bv,
         vec_model=vec_model,
         amp=args.amp,
-        # model_name=args.model_name,
-        model_name='bimpm',
+        model_name=args.model_name,
         early_stopping=args.early_stopping,
         epochs=args.epochs,
-        # use_mul_head_attn=args.use_multi_head_attn
-        use_mul_head_attn=True
+        use_mul_head_attn=args.use_multi_head_attn
       )
-    # for fold, warm_start in zip(args.training_folds, args.warm_start_folds):
-        # trainer.train(fold, warm_start=warm_start)
-    # trainer.predict()
+    for fold, warm_start in zip(args.training_folds, args.warm_start_folds):
+        trainer.train(fold, warm_start=warm_start)
+    trainer.predict()
     trainer.merge()
     
   #%%
