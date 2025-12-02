@@ -10,7 +10,8 @@ class BuildVocab:
     def __init__(self,
                  train_path,
                  test_path,
-                 max_len=30):
+                 max_len=30,
+                 max_char_len=10):
         train = pd.read_csv(train_path)
         test = pd.read_csv(test_path)
         train = self._mask_data(train)
@@ -27,6 +28,7 @@ class BuildVocab:
         self.save_path = 'artifacts/words_index.json'
         self.vocab_exe = False
         self.max_len = max_len
+        self.max_char_len = max_char_len
     
     def _mask_data(self, data):
         mask = pd.isnull(data['question1']) | pd.isnull(data['question2'])
@@ -34,7 +36,7 @@ class BuildVocab:
         data = data.reset_index().drop('index', axis=1)
         return data
     
-    def vocab(self):
+    def build_vocab(self):
         ind = 2
         nlp = spacy.blank("en") 
         tokenizer = nlp.tokenizer
@@ -59,28 +61,48 @@ class BuildVocab:
                     ind += 1
         self.vocab_exe = True
     
+    def build_char_vocab(self):
+        ind = 2
+        self.char_index = {}
+        self.char_index['<pad>'] = 0
+        self.char_index['<unk>'] = 1
+        chars = 'abcdefghijklmnopqrstuvwxyz0123456789.,!?;:\'"-()[]{}@#$%^&*_+=/\\'
+        for c in chars:
+            self.char_index[c] = ind
+            ind += 1
+    
     def convert_sent_to_index(self):
         if not self.vocab_exe:
             raise ValueError('please run vocab method first to build the vocabulary')
-        
         unk_idx = self.words_index['<unk>']
+        unk_char_idx = self.char_index['<unk>']
         for q in self.columns:
             for i, d in enumerate([self.train_data, self.test_data]):
                 sentences, sent_lens = [], []
+                words = []
                 cur_data = 'train' if i == 0 else 'test'
                 tq_ts = tqdm(d[q].values, total=d.shape[0], desc=f'converting sentence to word index for {cur_data} {q}')
                 for sent in tq_ts:
                     tokens = self.tokenizer(sent)
+                    char_indices = [[self.char_index.get(c, unk_char_idx) for c in w.text.lower()] for w in tokens]
+                    char_indices = [indice+[self.char_index['<pad>']]*(self.max_char_len-len(indice)) if len(indice)<self.max_char_len else indice[:self.max_char_len] for indice in char_indices]
                     sent_index = [self.words_index.get(token.text.lower(), unk_idx) for token in tokens]
-                    sent_index = sent_index[:self.max_len]
+                    sent_index = sent_index[: self.max_len]
+                    char_indices = char_indices[: self.max_len]
                     sent_len = len(sent_index)
                     sent_lens.append(sent_len)
                     if len(sent_index) < self.max_len:
+                        padding_char = [self.char_index['<pad>']] * self.max_char_len
+                        for _ in range(self.max_len - len(sent_index)):
+                            char_indices.append(padding_char)
                         sent_index += [self.words_index['<pad>']] * (self.max_len - len(sent_index))
                     sentences.append(sent_index)
+                    words.append(np.array(char_indices))
+                words = np.stack(words, axis=0).astype(np.int8)
                 sentences = np.array(sentences)
                 np.save(f'artifacts/{cur_data}_{q}.npy', sentences)
                 np.save(f'artifacts/{cur_data}_{q}_len.npy', np.array(sent_lens))
+                np.save(f'artifacts/{cur_data}_{q}_char.npy', words)
     
     def save(self):
         if len(self.words_index) <= 1:
@@ -114,12 +136,14 @@ class BuildVocab:
         return nps
 
 if __name__ == '__main__':
-    build_vocab = BuildVocab(
+    build_vocab = BuildVocab( 
         'data/train.csv',
         'data/test.csv',
-        max_len=40
+        max_len=40,
+        max_char_len=20
       )
-    build_vocab.vocab()
+    build_vocab.build_vocab()
+    build_vocab.build_char_vocab()
     build_vocab.save()
     build_vocab.convert_sent_to_index()
 
