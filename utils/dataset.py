@@ -23,22 +23,30 @@ class QQPDataset(Dataset):
         q2_key = f'{base_data}_question2'
         q1_len_key = f'{q1_key}_len'
         q2_len_key = f'{q2_key}_len'
+        q1_char_key = f'{q1_key}_char'
+        q2_char_key = f'{q2_key}_char'
         q1_data = self.sent_idx[q1_key]
         q2_data = self.sent_idx[q2_key]
         q1_lens = self.sent_idx[q1_len_key]
         q2_lens = self.sent_idx[q2_len_key]
+        q1_chars = self.sent_idx[q1_char_key]
+        q2_chars = self.sent_idx[q2_char_key]
         
         q1 = q1_data[idx]
         q2 = q2_data[idx]
         q1_len = q1_lens[idx]
         q2_len = q2_lens[idx]
+        q1_char = q1_chars[idx]
+        q2_char = q2_chars[idx]
         row = self.data[idx]
         id = row[0]
         if self.mode != 'test':
             y = row[-1]
-            return id, q1, q2, q1_len, q2_len, y
+            return id, q1, q2, q1_len, q2_len, q1_char, q2_char, y
         else:
-            return id, q1, q2, q1_len, q2_len
+            return id, q1, q2, q1_len, q2_len, q1_char, q2_char
         
 
 #%%
+
+
