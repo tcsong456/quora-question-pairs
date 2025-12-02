@@ -74,6 +74,7 @@ class BuildVocab:
     def convert_sent_to_index(self):
         if not self.vocab_exe:
             raise ValueError('please run vocab method first to build the vocabulary')
+
         unk_idx = self.words_index['<unk>']
         unk_char_idx = self.char_index['<unk>']
         for q in self.columns:
@@ -125,14 +126,16 @@ class BuildVocab:
                 base_path = f'artifacts/{d}_{q}'
                 cur_path = f'{base_path}.npy'
                 len_path = f'{base_path}_len.npy'
+                char_path = f'{base_path}_char.npy'
                 if not os.path.exists(cur_path):
                     raise ValueError(f'{cur_path} does not exist, please run convert_sent_to_index method first')
                 data = np.load(cur_path)
-                data_len = np.load(len_path)
+                for path in [len_path, char_path]:
+                    f_len_name = os.path.basename(path)[:-4]
+                    df = np.load(path)
+                    nps[f_len_name] = df
                 f_name = os.path.basename(base_path)
-                f_len_name = os.path.basename(len_path)[:-4]
                 nps[f_name] = data
-                nps[f_len_name] = data_len
         return nps
 
 if __name__ == '__main__':
@@ -148,3 +151,4 @@ if __name__ == '__main__':
     build_vocab.convert_sent_to_index()
 
 #%%
+
