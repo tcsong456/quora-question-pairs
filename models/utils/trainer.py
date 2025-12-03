@@ -9,8 +9,8 @@ from tqdm import tqdm
 from torch import optim
 from models.bimpm import BiMPM
 from models.diin import DIIN
-from utils.build_vocab import BuildVocab
-from utils.dataset import QQPDataset
+from models.utils.build_vocab import BuildVocab
+from models.utils.dataset import QQPDataset
 from torch.utils.data import DataLoader
 from torch.cuda.amp import autocast, GradScaler
 from sklearn.model_selection import StratifiedKFold
@@ -37,7 +37,6 @@ class Trainer:
                  epochs=50,
                  amp=True,
                  model_name='bimpm',
-                 use_mul_head_attn=False,
                  early_stopping=1):
         train = vocab.train_data
         test = vocab.test_data
@@ -67,10 +66,20 @@ class Trainer:
                               mp_dim=20,
                               vec_model=vec_model,
                               device=device,
-                              multi_attn_head=use_mul_head_attn
+                              multi_attn_head=True
                             ).to(device)
+                self.suffix = '_multi_head'
             elif model_name == 'diin':
-                pass
+                model = DIIN(
+                    emb_dim=300,
+                    char_dim=100,
+                    hidden_dim=100,
+                    vec_model=vec_model,
+                    vocab=bv,
+                    highway_layers=2,
+                    self_attn_layers=4
+                  ).to(device)
+                self.suffix = ''
             
             optimizer = optim.Adam(model.parameters(),
                                    lr=0.002)
@@ -80,11 +89,7 @@ class Trainer:
         os.makedirs('checkpoints', exist_ok=True)
         self.loss_fn = nn.BCEWithLogitsLoss()
         self.early_stopping = early_stopping
-        if use_mul_head_attn:
-            suffix = '_multi_head'
-        else:
-            suffix = ''
-        self.suffix = suffix
+        
         self.model_name = model_name
         self.test = test
     
@@ -284,7 +289,6 @@ def parse_args():
     parser.add_argument('--model-name', type=str, default='none')
     parser.add_argument('--epochs', type=int, default=50)
     parser.add_argument('--early-stopping', type=int, default=3)
-    parser.add_argument('--use-multi-head-attn', action='store_true')
     parser.add_argument('--training-folds', type=int_list)
     args = parser.parse_args()
     return args
@@ -293,6 +297,7 @@ if __name__ == '__main__':
     args = parse_args()
     bv = BuildVocab('data/train.csv',
                     'data/test.csv')
+    bv.build_char_vocab()
     if args.model_name == 'bimpm':
         vec_model = load_facebook_model('artifacts/cc.en.300.bin')
     elif args.model_name in ['diin', 'esim']:
@@ -315,8 +320,7 @@ if __name__ == '__main__':
         amp=args.amp,
         model_name=args.model_name,
         early_stopping=args.early_stopping,
-        epochs=args.epochs,
-        use_mul_head_attn=args.use_multi_head_attn
+        epochs=args.epochs
       )
     for fold, warm_start in zip(args.training_folds, args.warm_start_folds):
         trainer.train(fold, warm_start=warm_start)
