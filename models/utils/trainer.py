@@ -16,6 +16,9 @@ from torch.cuda.amp import autocast, GradScaler
 from sklearn.model_selection import StratifiedKFold
 from gensim.models.fasttext import load_facebook_model
 
+def has_any_nan_or_inf(t):
+    return not torch.isfinite(t).all()
+
 class AverageMeter:
     def __init__(self):
         self.reset()
@@ -94,6 +97,7 @@ class Trainer:
         self.test = test
     
     def train(self, fold, warm_start=False):
+        torch.autograd.set_detect_anomaly(True)
         model = self.models[fold]
         optimizer = self.optimizers[fold]
         checkpoint_path = f'checkpoints/{self.model_name}_{fold}{self.suffix}.pth'
@@ -137,7 +141,7 @@ class Trainer:
             train_dl = tqdm(train_dataloader,
                             total=len(train_dataloader),
                             desc=f'running fold {fold} in training')
-            for batch in train_dl:
+            for step, batch in enumerate(train_dl):
                 for i, v in enumerate(batch):
                     if isinstance(v, torch.Tensor):
                         batch[i] = v.to(self.device)
@@ -149,8 +153,17 @@ class Trainer:
                     loss = self.loss_fn(y_pred.view(-1), y_true.float())
                 
                 scaler.scale(loss).backward()
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 scaler.step(optimizer)
                 scaler.update()
+                
+                # for name, p in model.named_parameters():
+                #     if p.grad is None:
+                #         continue
+                #     if has_any_nan_or_inf(p.grad):
+                #         print(f"[STEP {step}] NaN/Inf in grad of {name}")
+                #         break
                 
                 loss_meter_tr.update(loss.item(), 1)
                 loss = loss_meter_tr.average

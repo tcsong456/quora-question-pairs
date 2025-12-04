@@ -145,10 +145,10 @@ if __name__ == '__main__':
         max_len=40,
         max_char_len=20
       )
-    build_vocab.build_vocab()
+    # build_vocab.build_vocab()
     build_vocab.build_char_vocab()
-    build_vocab.save()
-    build_vocab.convert_sent_to_index()
+    # build_vocab.save()
+    # build_vocab.convert_sent_to_index()
 
 #%%
 

@@ -83,7 +83,8 @@ class DIIN(nn.Module):
                                            padding_idx=word_to_idx['<pad>'])
         self.word_embedding.weight.data.copy_(torch.from_numpy(embedding_matrix))
         self.word_embedding.weight.requires_grad = True
-        self.char_embedding = nn.Embedding(char_vocab_size, char_dim)
+        self.char_embedding = nn.Embedding(char_vocab_size, char_dim,
+                                           padding_idx=0)
         self.char_dim = char_dim
         self.highway_layers = highway_layers
         self.self_attn_layers = self_attn_layers
@@ -97,6 +98,11 @@ class DIIN(nn.Module):
                       kernel_size=kernel_size)
             for kernel_size in [3, 4, 5]
           ])
+        for conv in self.char_convs:
+            nn.init.kaiming_uniform_(conv.weight, nonlinearity='relu')
+            if conv.bias is not None:
+                nn.init.constant_(conv.bias, 0.0)
+
         highway_dim = 50*3 + emb_dim
         self.highway_lienar = nn.Linear(highway_dim, highway_dim)
         self.self_attn_linears = nn.ModuleList([
@@ -140,10 +146,10 @@ class DIIN(nn.Module):
         
         for i in range(self.self_attn_layers):
             x_q1, self_att_q1 = self._self_attention(q1_emb, q1_mask, i)
-            # self_att_q1 = self._gating_layer(x_q1, self_att_q1, mode='q1')
+            self_att_q1 = self._gating_layer(x_q1, self_att_q1, mode='q1')
             q1_emb = self_att_q1 + q1_emb
             x_q2, self_att_q2 = self._self_attention(q2_emb, q2_mask, i)
-            # self_att_q2 = self._gating_layer(x_q2, self_att_q2, mode='q2')
+            self_att_q2 = self._gating_layer(x_q2, self_att_q2, mode='q2')
             q2_emb = self_att_q2 + q2_emb
         
         bi_att_mx = self_att_q1.unsqueeze(2) * self_att_q2.unsqueeze(1)
@@ -206,14 +212,13 @@ class DIIN(nn.Module):
     #     seq_len = x.shape[1]
     #     x_i = x.unsqueeze(2)
     #     x_j = x.unsqueeze(1)
-        
-    #     x_i = x_i.repeat(1, 1, seq_len, 1)
-    #     x_j = x_j.repeat(1, seq_len, 1, 1)
     #     x_interaction = x_i * x_j
+    #     x_i = x_i.expand(-1, -1, seq_len, -1)
+    #     x_j = x_j.expand(-1, seq_len, -1, -1)
         
     #     x_cat = torch.cat([x_i, x_j, x_interaction], dim=-1)
     #     x_attn = self.self_attn_linears[i](x_cat).squeeze(-1)
-    #     q_mask = q_mask.unsqueeze(1)
+    #     q_mask = q_mask.bool().unsqueeze(1)
     #     invalid_mask = ~q_mask
     #     logits = x_attn.masked_fill(invalid_mask, -1e-9)
     #     attn_weights = torch.softmax(logits, dim=-1)
