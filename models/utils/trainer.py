@@ -8,7 +8,8 @@ from torch import nn
 from tqdm import tqdm
 from torch import optim
 from models.bimpm import BiMPM
-from models.diin import DIIN
+# from models.diin import DIIN
+from models.diin_v1 import DIIN
 from models.utils.build_vocab import BuildVocab
 from models.utils.dataset import QQPDataset
 from torch.utils.data import DataLoader
@@ -73,21 +74,47 @@ class Trainer:
                             ).to(device)
                 self.suffix = '_multi_head'
             elif model_name == 'diin':
-                model = DIIN(
-                    emb_dim=300,
-                    char_dim=100,
-                    hidden_dim=100,
-                    vec_model=vec_model,
+                # model = DIIN(
+                #     emb_dim=300,
+                #     char_dim=100,
+                #     hidden_dim=100,
+                #     vec_model=vec_model,
+                #     vocab=bv,
+                #     highway_layers=2,
+                #     self_attn_layers=2
+                #   ).to(device)
+                
+                model  = DIIN(
                     vocab=bv,
-                    highway_layers=2,
-                    self_attn_layers=4
-                  ).to(device)
+                    vec_model=vec_model,
+                    char_dim=100,
+                    emb_dim=300,
+                    sa_num_layers=2,
+                    sa_num_heads=4,
+                    sa_ff_dim=512,
+                    sa_dropout=0.15,
+                    cnn_base_channels=64,
+                    dense_growth_rate=16,
+                    dense_layers_per_block=2,
+                    cnn_dropout=0.1
+                ).to(device)
                 self.suffix = ''
             
             optimizer = optim.Adam(model.parameters(),
                                    lr=0.002)
+            # scheduler = torch.optim.lr_scheduler.OneCycleLR(
+            #       optimizer,
+            #       max_lr=0.005,         # peak LR
+            #       steps_per_epoch=int(train.shape[0]*0.8//256+1),
+            #       epochs=3,
+            #       pct_start=0.3,        # warmup
+            #       anneal_strategy='cos',
+            #       div_factor=10,
+            #       final_div_factor=100
+            #   )
             self.optimizers.append(optimizer)
             self.models.append(model)
+            # self.schedulers.append(scheduler)
             
         os.makedirs('checkpoints', exist_ok=True)
         self.loss_fn = nn.BCEWithLogitsLoss()
@@ -100,6 +127,7 @@ class Trainer:
         torch.autograd.set_detect_anomaly(True)
         model = self.models[fold]
         optimizer = self.optimizers[fold]
+        # scheduler = self.schedulers[fold]
         checkpoint_path = f'checkpoints/{self.model_name}_{fold}{self.suffix}.pth'
         best_loss = np.inf
         bad_epoch = 0
@@ -158,13 +186,6 @@ class Trainer:
                 scaler.step(optimizer)
                 scaler.update()
                 
-                # for name, p in model.named_parameters():
-                #     if p.grad is None:
-                #         continue
-                #     if has_any_nan_or_inf(p.grad):
-                #         print(f"[STEP {step}] NaN/Inf in grad of {name}")
-                #         break
-                
                 loss_meter_tr.update(loss.item(), 1)
                 loss = loss_meter_tr.average
                 train_dl.set_postfix({
@@ -172,6 +193,7 @@ class Trainer:
                     'lr': f'{current_lr: .4f}'
                     } 
                   )
+                # scheduler.step()
 
             val_dl = tqdm(val_dataloader,
                           total=len(val_dataloader),
@@ -326,7 +348,7 @@ if __name__ == '__main__':
                     glove[word] = vec
                     pbar.update(len(line.encode('utf8')))
         vec_model = glove
-        
+    
     trainer = Trainer(
         vocab=bv,
         vec_model=vec_model,
