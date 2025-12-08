@@ -200,17 +200,17 @@ class Trainer:
                 if val_loss < best_loss:
                     best_loss = val_loss
                     bad_epoch = 0
-                    # torch.save({
-                    #     'model': model.state_dict(),
-                    #     'optimizer': optimizer.state_dict(),
-                    #     'best_loss': best_loss,
-                    #     'epoch': epoch
-                    #   }, checkpoint_path)
-                    # ids = np.concatenate(ids)
-                    # features = torch.cat(features,dim=0)
-                    # features = features.detach().cpu().numpy()
-                    # features = np.concatenate([ids[:, None], features], axis=1)
-                    # np.save(f'artifacts/training/{self.model_name}_features_{fold}{self.suffix}.npy', features.astype(np.float32))
+                    torch.save({
+                        'model': model.state_dict(),
+                        'optimizer': optimizer.state_dict(),
+                        'best_loss': best_loss,
+                        'epoch': epoch
+                      }, checkpoint_path)
+                    ids = np.concatenate(ids)
+                    features = torch.cat(features,dim=0)
+                    features = features.detach().cpu().numpy()
+                    features = np.concatenate([ids[:, None], features], axis=1)
+                    np.save(f'artifacts/training/{self.model_name}_features_{fold}{self.suffix}.npy', features.astype(np.float32))
                 else:
                     bad_epoch += 1
             if bad_epoch == self.early_stopping:
@@ -219,7 +219,7 @@ class Trainer:
     
     @torch.no_grad()
     def predict(self):
-        os.makedirs('artifacts/predictions', exist_ok=True)
+        os.makedirs('artifacts/prediction', exist_ok=True)
         for fold in range(5):
             checkpoint = f'checkpoints/{self.model_name}_{fold}{self.suffix}.pth'
             model = self.models[fold]
