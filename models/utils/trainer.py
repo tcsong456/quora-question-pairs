@@ -104,7 +104,7 @@ class Trainer:
         self.test = test
     
     def train(self, fold, warm_start=False):
-        torch.autograd.set_detect_anomaly(True)
+        # torch.autograd.set_detect_anomaly(True)
         model = self.models[fold]
         optimizer = self.optimizers[fold]
         checkpoint_path = f'checkpoints/{self.model_name}_{fold}{self.suffix}.pth'
