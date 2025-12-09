@@ -198,17 +198,6 @@ class DIIN(nn.Module):
         char_emb = self.char_emb_dropout(char_emb)
         return char_emb
     
-    # def _cross_attention(self, q1, q2, q2_mask):
-    #     q1_i = self.cross_attention_w(q1)
-    #     q2_j = self.cross_attention_w(q2)
-    #     sum_w = q1_i.unsqueeze(2) + q2_j.unsqueeze(1)
-    #     logits = torch.sum(torch.tanh(sum_w) * self.additive_dot_weights, dim=-1)
-    #     q2_mask_ = (1 - q2_mask.float()) * -1e4
-    #     logits = logits * q2_mask.float().unsqueeze(1) + q2_mask_.unsqueeze(1)
-    #     attn = torch.softmax(logits, dim=-1)
-    #     out = attn @ q2
-    #     return out
-    
     def _self_attention(self, x, q_mask, i):
         B, L, D = x.shape
     
