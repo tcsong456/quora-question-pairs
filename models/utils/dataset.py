@@ -48,25 +48,5 @@ class QQPDataset(Dataset):
         
 
 #%%
-# import numpy as np
-# from torch.utils.data import DataLoader
-# from models.utils.build_vocab import BuildVocab
-# bv = BuildVocab( 
-#     'data/train.csv',
-#     'data/test.csv',
-#     max_len=40,
-#     max_char_len=20
-#   )
-# dataset = QQPDataset(
-#     bv,
-#     np.arange(bv.train_data.shape[0]),
-#     mode='train'
-#   )
-# dl = DataLoader(
-#     dataset,
-#     batch_size=128,
-#     shuffle=True
-#   )
-# for batch in dl:
-#     break
+
 
