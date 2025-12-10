@@ -1,3 +1,4 @@
+import torch
 from torch.utils.data import Dataset
 from transformers import AutoTokenizer
 
@@ -83,19 +84,35 @@ class SBERTDataset(Dataset):
             max_length=self.max_len,
             return_tensors="pt"
         )
-        item = {
-            "q1_input_ids": enc1["input_ids"].squeeze(0),
-            "q1_attention_mask": enc1["attention_mask"].squeeze(0),
-            "q2_input_ids": enc2["input_ids"].squeeze(0),
-            "q2_attention_mask": enc2["attention_mask"].squeeze(0),
-        }
-        if self.mode == 'train':
+        q1_input_ids = enc1["input_ids"].squeeze(0),
+        q1_attention_mask = enc1["attention_mask"].squeeze(0),
+        q2_input_ids = enc2["input_ids"].squeeze(0),
+        q2_attention_mask = enc2["attention_mask"].squeeze(0),
+            
+        if self.mode != 'test':
             label = float(row["is_duplicate"])
-            item.update({"label": torch.tensor(label, dtype=torch.float)})
-            return row['id'], item
+            return row['id'], q1_input_ids[0], q2_input_ids[0], q1_attention_mask[0], q2_attention_mask[0], label
         else:
-            return row['test_id'], item
-        
+            return row['test_id'], q1_input_ids[0], q2_input_ids[0], q1_attention_mask[0], q2_attention_mask[0]
+
+class DeBERTaV3Dataset(Dataset):
+    def __init__(self,
+                 bv,
+                 q_idx,
+                 mode='tain'):
+        assert mode in ['train', 'val', 'test']
+        data = bv.train_data if mode != 'test' else bv.test_data
+        self.q_idx = q_idx
+        self.data = data
+        self.mode = mode
+        self.tokenizer = AutoTokenizer.from_pretrained("microsoft/deberta-v3-base")
+        self.max_len = 40
+    
+    def __len__(self):
+      return len(self.q_idx)
+    
+    def __getitem__(self, index):
+        pass
 
 #%%
 # import numpy as np
