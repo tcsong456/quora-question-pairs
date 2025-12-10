@@ -10,12 +10,14 @@ from torch import optim
 from models.bimpm import BiMPM
 from models.diin import DIIN
 from models.esim import ESIM
+from models.sbert import SBERT
 from models.utils.build_vocab import BuildVocab
-from models.utils.dataset import QQPDataset
+from models.utils.dataset import QQPDataset, SBERTDataset
 from torch.utils.data import DataLoader
 from torch.cuda.amp import autocast, GradScaler
 from sklearn.model_selection import StratifiedKFold
 from gensim.models.fasttext import load_facebook_model
+from transformers import get_linear_schedule_with_warmup
 
 class AverageMeter:
     def __init__(self):
@@ -35,6 +37,7 @@ class Trainer:
     def __init__(self,
                  vocab,
                  vec_model=None,
+                 batch_size=32,
                  epochs=50,
                  amp=True,
                  model_name='bimpm',
@@ -50,7 +53,7 @@ class Trainer:
         self.vocab = vocab
         
         self.data_train, self.data_val = [], []
-        self.models, self.optimizers, self.schedulers = [], [], []
+        self.models, self.optimizers = [], []
         y = train['is_duplicate'].values
         x = train.drop('is_duplicate', axis=1)
         skf = StratifiedKFold(n_splits=5, random_state=7610, shuffle=True)
@@ -71,6 +74,7 @@ class Trainer:
                             ).to(device)
                 self.suffix = '_multi_head'
             elif model_name == 'diin':
+                assert vec_model is not None 
                 model = DIIN(
                       vocab=bv,
                       vec_model=vec_model,
@@ -82,6 +86,7 @@ class Trainer:
                   ).to(device)
                 self.suffix = ''
             elif model_name == 'esim':
+                assert vec_model is not None 
                 model = ESIM(
                     vocab=bv,
                     vec_model=vec_model,
@@ -90,11 +95,31 @@ class Trainer:
                     hidden_dim=200
                   ).to(device)
                 self.suffix = ''
+            elif model_name == 'sbert':
+                model = SBERT(
+                    model_name="sentence-transformers/all-mpnet-base-v2"
+                  ).to(device)
+                self.suffix = ''
             
-            optimizer = optim.Adam(model.parameters(),
-                                   lr=0.002)
+            if model_name != 'sbert':
+                optimizer = optim.Adam(model.parameters(),
+                                        lr=0.002)
+                dataset = QQPDataset
+            else:
+                encoder_lr = 2e-5
+                head_lr    = 5e-4
+                optimizer = torch.optim.AdamW(
+                    [
+                        {"params": model.encoder.parameters(), "lr": encoder_lr},
+                        {"params": model.compress_layer.parameters(), "lr": head_lr},
+                        {"params": model.final_layer.parameters(), "lr": head_lr},
+                    ],
+                    weight_decay=0.01,
+                )
+                dataset = SBERTDataset
             self.optimizers.append(optimizer)
             self.models.append(model)
+            self.dataset = dataset
 
         os.makedirs('checkpoints', exist_ok=True)
         self.loss_fn = nn.BCEWithLogitsLoss()
@@ -102,9 +127,10 @@ class Trainer:
         
         self.model_name = model_name
         self.test = test
+        self.train_data = train
+        self.batch_size = batch_size
     
     def train(self, fold, warm_start=False):
-        torch.autograd.set_detect_anomaly(True)
         model = self.models[fold]
         optimizer = self.optimizers[fold]
         checkpoint_path = f'checkpoints/{self.model_name}_{fold}{self.suffix}.pth'
@@ -124,16 +150,16 @@ class Trainer:
         loss_meter_tr = AverageMeter()
         loss_meter_val = AverageMeter()
         
-        train_dataset = QQPDataset(bv=self.vocab,
+        train_dataset = self.dataset(bv=self.vocab,
                                    q_idx=train_idx,
                                    mode='train')
-        val_dataset = QQPDataset(bv=self.vocab,
+        val_dataset = self.dataset(bv=self.vocab,
                                  q_idx=val_idx,
                                  mode='val')
         train_dataloader = DataLoader(
             train_dataset,
             shuffle=True,
-            batch_size=256
+            batch_size=self.batch_size
           )
         val_dataloader = DataLoader(
             val_dataset,
@@ -142,13 +168,21 @@ class Trainer:
           )
         
         os.makedirs('artifacts/training', exist_ok=True)
+        if self.model_name == 'sbert':
+            total_steps = 2 * int(self.train_data.shape[0] * 0.8 // self.batch_size + 1)
+            warmup_steps = int(0.1 * total_steps)
+            scheduler = get_linear_schedule_with_warmup(
+            optimizer,
+            num_warmup_steps=warmup_steps,
+            num_training_steps=total_steps,
+        )
         for epoch in range(start_epoch, self.epochs):
             model.train()
-            current_lr = optimizer.param_groups[0]['lr']
             train_dl = tqdm(train_dataloader,
                             total=len(train_dataloader),
                             desc=f'running fold {fold} in training')
             for step, batch in enumerate(train_dl):
+                current_lr = optimizer.param_groups[0]['lr']
                 for i, v in enumerate(batch):
                     if isinstance(v, torch.Tensor):
                         batch[i] = v.to(self.device)
@@ -164,20 +198,22 @@ class Trainer:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 scaler.step(optimizer)
                 scaler.update()
+                if self.model_name == 'sbert':
+                    scheduler.step()
                 
                 loss_meter_tr.update(loss.item(), 1)
                 loss = loss_meter_tr.average
                 train_dl.set_postfix({
                     f'epoch {epoch} loss': f'{loss:.5f}',
-                    'lr': f'{current_lr: .4f}'
+                    'lr': f'{current_lr: .5f}'
                     } 
                   )
-            val_dl = tqdm(val_dataloader,
-                          total=len(val_dataloader),
-                          desc=f'running fold {fold} in evaluation')
             
             with torch.no_grad():
                 model.eval()
+                val_dl = tqdm(val_dataloader,
+                              total=len(val_dataloader),
+                              desc=f'running fold {fold} in evaluation')
                 features,ids = [], []
                 for batch in val_dl:
                     for i, v in enumerate(batch):
@@ -227,7 +263,7 @@ class Trainer:
             model.load_state_dict(ckpt['model'])
             
             test_index = np.arange(len(self.test))
-            test_dataset = QQPDataset(
+            test_dataset = self.dataset(
                 bv=self.vocab,
                 q_idx=test_index,
                 mode='test'
@@ -256,13 +292,13 @@ class Trainer:
             features = torch.cat(features,dim=0)
             features = features.detach().cpu().numpy()
             features = np.concatenate([ids[:, None], features], axis=1)
-            np.save(f'artifacts/predictions/{self.model_name}_features_{fold}{self.suffix}.npy', features.astype(np.float32))
+            np.save(f'artifacts/prediction/{self.model_name}_features_{fold}{self.suffix}.npy', features.astype(np.float32))
       
     def merge(self):
         print('merging scattered features')
         train_feats = []
         for fold in range(5):
-            prediction_path = f'artifacts/predictions/{self.model_name}_features_{fold}{self.suffix}.npy'
+            prediction_path = f'artifacts/prediction/{self.model_name}_features_{fold}{self.suffix}.npy'
             train_path = f'artifacts/training/{self.model_name}_features_{fold}{self.suffix}.npy'
             test_features = np.load(prediction_path)
             train_features = np.load(train_path)
@@ -281,7 +317,7 @@ class Trainer:
         test_features = total_features[sorted_index]
         
         np.save(f'artifacts/training/{self.model_name}_features{self.suffix}.npy', train_features)
-        np.save(f'artifacts/predictions/{self.model_name}_features{self.suffix}.npy', total_features)
+        np.save(f'artifacts/prediction/{self.model_name}_features{self.suffix}.npy', total_features)
 
 def parse_args():
     def int_list(arg):
@@ -304,6 +340,7 @@ def parse_args():
     parser.add_argument('--epochs', type=int, default=50)
     parser.add_argument('--early-stopping', type=int, default=3)
     parser.add_argument('--training-folds', type=int_list)
+    parser.add_argument('--batch-size', type=int, default=256)
     args = parser.parse_args()
     return args
 
@@ -327,6 +364,8 @@ if __name__ == '__main__':
                     glove[word] = vec
                     pbar.update(len(line.encode('utf8')))
         vec_model = glove
+    else:
+        vec_model = None
     
     trainer = Trainer(
         vocab=bv,
@@ -334,7 +373,8 @@ if __name__ == '__main__':
         amp=args.amp,
         model_name=args.model_name,
         early_stopping=args.early_stopping,
-        epochs=args.epochs
+        epochs=args.epochs,
+        batch_size=args.batch_size
       )
     for fold, warm_start in zip(args.training_folds, args.warm_start_folds):
         trainer.train(fold, warm_start=warm_start)
