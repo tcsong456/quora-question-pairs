@@ -3,6 +3,8 @@ import torch
 import argparse
 import warnings
 warnings.filterwarnings(action='ignore')
+from transformers import logging
+logging.set_verbosity_error()
 import numpy as np
 from torch import nn
 from tqdm import tqdm
@@ -11,8 +13,9 @@ from models.bimpm import BiMPM
 from models.diin import DIIN
 from models.esim import ESIM
 from models.sbert import SBERT
+from models.deberta import DeBertaV3
 from models.utils.build_vocab import BuildVocab
-from models.utils.dataset import QQPDataset, SBERTDataset
+from models.utils.dataset import QQPDataset, SBERTDataset, DeBERTaV3Dataset
 from torch.utils.data import DataLoader
 from torch.cuda.amp import autocast, GradScaler
 from sklearn.model_selection import StratifiedKFold
@@ -38,6 +41,7 @@ class Trainer:
                  vocab,
                  vec_model=None,
                  batch_size=32,
+                 test_batch_size=20,
                  epochs=50,
                  amp=True,
                  model_name='bimpm',
@@ -100,31 +104,58 @@ class Trainer:
                     model_name="sentence-transformers/all-mpnet-base-v2"
                   ).to(device)
                 self.suffix = ''
+            elif model_name == 'deberta':
+                model = DeBertaV3(
+                      model_name="microsoft/deberta-v3-base"
+                    ).to(device)
+                self.suffix = ''
             
-            if model_name != 'sbert':
+            if model_name not in ['sbert', 'deberta']:
                 optimizer = optim.Adam(model.parameters(),
                                         lr=0.002)
                 dataset = QQPDataset
             else:
-                encoder_lr = 2e-5
-                head_lr    = 5e-4
-                optimizer = torch.optim.AdamW(
-                    [
-                        {"params": model.encoder.parameters(), "lr": encoder_lr},
-                        {"params": model.compress_layer.parameters(), "lr": head_lr},
-                        {"params": model.final_layer.parameters(), "lr": head_lr},
-                    ],
-                    weight_decay=0.01,
-                )
-                dataset = SBERTDataset
+                encoder_lr, head_lr = 2e-5, 5e-4
+                no_decay = ["bias", "LayerNorm.weight", "layer_norm.weight"]
+                encoder_decay, encoder_nodecay = [], []
+                head_decay, head_nodecay = [], []
+                for name, param in model.named_parameters():
+                    if not param.requires_grad:
+                        continue
+                    in_encoder = name.startswith("encoder")
+                    use_nodecay = any(nd in name for nd in no_decay)
+                    if in_encoder:
+                        if use_nodecay:
+                            encoder_nodecay.append(param)
+                        else:
+                            encoder_decay.append(param)
+                    else:
+                        if use_nodecay:
+                            head_nodecay.append(param)
+                        else:
+                            head_decay.append(param)
+                weight_decay = 0.01
+                optimizer = optim.AdamW(
+                      [
+                        {"params": encoder_decay,   "lr": encoder_lr, "weight_decay": weight_decay},
+                        {"params": encoder_nodecay, "lr": encoder_lr, "weight_decay": 0.0},
+                        {"params": head_decay,      "lr": head_lr,    "weight_decay": weight_decay},
+                        {"params": head_nodecay,    "lr": head_lr,    "weight_decay": 0.0},
+                    ]
+                    )
+                if model_name == 'deberta':
+                    dataset = DeBERTaV3Dataset
+                else:
+                    dataset = SBERTDataset
+                    
             self.optimizers.append(optimizer)
             self.models.append(model)
             self.dataset = dataset
+            self.test_batch_size = test_batch_size
 
         os.makedirs('checkpoints', exist_ok=True)
         self.loss_fn = nn.BCEWithLogitsLoss()
         self.early_stopping = early_stopping
-        
         self.model_name = model_name
         self.test = test
         self.train_data = train
@@ -164,11 +195,11 @@ class Trainer:
         val_dataloader = DataLoader(
             val_dataset,
             shuffle=False,
-            batch_size=512
+            batch_size=self.test_batch_size
           )
         
         os.makedirs('artifacts/training', exist_ok=True)
-        if self.model_name == 'sbert':
+        if self.model_name in ['sbert', 'deberta']:
             total_steps = 2 * int(self.train_data.shape[0] * 0.8 // self.batch_size + 1)
             warmup_steps = int(0.1 * total_steps)
             scheduler = get_linear_schedule_with_warmup(
@@ -198,7 +229,7 @@ class Trainer:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 scaler.step(optimizer)
                 scaler.update()
-                if self.model_name == 'sbert':
+                if self.model_name in ['sbert', 'deberta']:
                     scheduler.step()
                 
                 loss_meter_tr.update(loss.item(), 1)
@@ -271,7 +302,7 @@ class Trainer:
             test_dataloader = DataLoader(
                 test_dataset,
                 shuffle=False,
-                batch_size=512
+                batch_size=self.test_batch_size
               )
             test_dl = tqdm(test_dataloader,
                           total=len(test_dataloader),
@@ -341,6 +372,7 @@ def parse_args():
     parser.add_argument('--early-stopping', type=int, default=3)
     parser.add_argument('--training-folds', type=int_list)
     parser.add_argument('--batch-size', type=int, default=256)
+    parser.add_argument('--test-batch-size', type=int, default=512)
     args = parser.parse_args()
     return args
 
@@ -374,7 +406,8 @@ if __name__ == '__main__':
         model_name=args.model_name,
         early_stopping=args.early_stopping,
         epochs=args.epochs,
-        batch_size=args.batch_size
+        batch_size=args.batch_size,
+        test_batch_size=args.test_batch_size
       )
     for fold, warm_start in zip(args.training_folds, args.warm_start_folds):
         trainer.train(fold, warm_start=warm_start)

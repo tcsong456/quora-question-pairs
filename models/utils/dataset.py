@@ -135,30 +135,3 @@ class DeBERTaV3Dataset(Dataset):
         else:
             return row['test_id'], input_ids, att_mask
         
-
-#%%
-# import numpy as np
-# from torch.utils.data import DataLoader
-# from models.utils.build_vocab import BuildVocab
-# bv = BuildVocab(
-#     'data/train.csv',
-#     'data/test.csv'
-#   )
-# sample_size = int(0.2*bv.train_data.shape[0])
-# indices = np.arange(bv.train_data.shape[0])
-# subset = np.random.choice(indices, size=sample_size, replace=False)
-
-# dataset = DeBERTaV3Dataset(
-#     bv=bv,
-#     q_idx=subset,
-#     mode='train'
-#   )
-# dl = DataLoader(
-#     dataset,
-#     batch_size=64,
-#     shuffle=True
-#   )
-# for batch in dl:
-#     break
-
-#%%
