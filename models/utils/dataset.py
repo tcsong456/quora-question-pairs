@@ -105,37 +105,33 @@ class DeBERTaV3Dataset(Dataset):
         self.q_idx = q_idx
         self.data = data
         self.mode = mode
-        self.tokenizer = AutoTokenizer.from_pretrained("microsoft/deberta-v3-base")
+        self.tokenizer = AutoTokenizer.from_pretrained("microsoft/deberta-v3-base",
+                                                       use_fast=False)
         self.max_len = 40
     
     def __len__(self):
       return len(self.q_idx)
     
     def __getitem__(self, index):
-        pass
-
-#%%
-# import numpy as np
-# from torch.utils.data import DataLoader
-# from models.utils.build_vocab import BuildVocab
-# bv = BuildVocab(
-#     'data/train.csv',
-#     'data/test.csv'
-#   )
-# sample_size = int(0.2*bv.train_data.shape[0])
-# indices = np.arange(bv.train_data.shape[0])
-# subset = np.random.choice(indices, size=sample_size, replace=False)
-# dataset = SBERTDataset(
-#     bv=bv,
-#     q_idx=subset,
-#     mode='train'
-#   )
-# dl = DataLoader(
-#     dataset,
-#     batch_size=256,
-#     shuffle=True
-#   )
-# for batch in dl:
-#     break
-
-#%%
+        idx = self.q_idx[index]
+        row = self.data.iloc[idx]
+        q1 = row['question1']
+        q2 = row['question2']
+        enc = self.tokenizer(
+            q1,
+            q2,
+            padding='max_length',
+            truncation=True,
+            max_length=80,
+            return_tensors='pt'
+          )
+        
+        input_ids = enc['input_ids'].squeeze(0)
+        att_mask = enc['attention_mask'].squeeze(0)
+        
+        if self.mode != 'test':
+            label = float(float(row['is_duplicate']))
+            return row['id'], input_ids, att_mask, label
+        else:
+            return row['test_id'], input_ids, att_mask
+        
