@@ -409,8 +409,8 @@ if __name__ == '__main__':
         batch_size=args.batch_size,
         test_batch_size=args.test_batch_size
       )
-    for fold, warm_start in zip(args.training_folds, args.warm_start_folds):
-        trainer.train(fold, warm_start=warm_start)
+    # for fold, warm_start in zip(args.training_folds, args.warm_start_folds):
+    #     trainer.train(fold, warm_start=warm_start)
     trainer.predict()
     trainer.merge()
     
