@@ -150,5 +150,3 @@ if __name__ == '__main__':
     build_vocab.save()
     build_vocab.convert_sent_to_index()
 
-#%%
-
