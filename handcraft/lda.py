@@ -97,5 +97,4 @@ if __name__ == '__main__':
     np.save('artifacts/training/lda_features.npy', lda_feats)
     np.save('artifacts/prediction/lda_features.npy', test_features)
 
-#%%
 

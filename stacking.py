@@ -8,7 +8,8 @@ def build_data(mode='train'):
     assert mode in ['train', 'test']
     location = 'training' if mode == 'train' else 'prediction'
     dfs = []
-    ft_name = ['bimpm_features_multi_head', 'diin_features', 'esim_features', 'sbert_features', 'deberta_features']
+    ft_name = ['bimpm_features_multi_head', 'diin_features', 'esim_features', 'sbert_features', 'deberta_features',
+               'lda_features', 'single_pair_tfidf', 'double_pair_tfidf']
     for f in ft_name:
         model = f.split('_')[0]
         f = f'artifacts/{location}/{f}.npy'

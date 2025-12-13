@@ -27,6 +27,9 @@ def diff_words(row):
     diff = ' '.join((set(s1 - s2)) | (set(s2 - s1)))
     return diff
 
+def l2_norm(x):
+    return np.sqrt(x.multiply(x).sum(axis=1)).A1
+
 if __name__ == '__main__':
     bv = BuildVocab(
             'data/train.csv',
@@ -53,18 +56,14 @@ if __name__ == '__main__':
     ngram_range=(1,1),
     min_df=3, max_df=0.98,
     sublinear_tf=True,
-    max_features=80000
+    max_features=80000,
+    norm=None
 )
-    svd_diff = TruncatedSVD(n_components=32, random_state=951)
-    pipe_diff = make_pipeline(
-        tfidf_diff,
-        svd_diff
-    )
     
     test['common_words'] = test.apply(common_words, axis=1)
     test['diff_words'] = test.apply(diff_words, axis=1)
-    common_features, diff_features, ids = [], [], []
-    common_test_features, diff_test_features = [], []
+    common_features, diff_l2_features, diff_l1_features = [], [], []
+    ids, common_test_features, diff_l2_test_features, diff_l1_test_features = [], [], [], []
     y = train['is_duplicate']
     x = train.drop('is_duplicate', axis=1)
     skf = StratifiedKFold(n_splits=5, random_state=7610, shuffle=True)
@@ -75,31 +74,35 @@ if __name__ == '__main__':
         x_tr['common_words'] = x_tr.apply(common_words, axis=1)
         x_tr['diff_words'] = x_tr.apply(diff_words, axis=1)
         pipe_common.fit(x_tr['common_words'].values.tolist())
-        pipe_diff.fit(x_tr['diff_words'].values.tolist())
+        tfidf_diff.fit(x_tr['diff_words'].values.tolist())
         
         x_val['common_words'] = x_val.apply(common_words, axis=1)
         x_val['diff_words'] = x_val.apply(diff_words, axis=1)
         x_common = pipe_common.transform(x_val['common_words'].values.tolist())
-        x_diff = pipe_diff.transform(x_val['diff_words'].values.tolist())
+        x_diff = tfidf_diff.transform(x_val['diff_words'].values.tolist())
         common_features.append(x_common)
-        diff_features.append(np.sqrt((x_diff * x_diff).sum(axis=1)))
+        diff_l2_features.append(l2_norm(x_diff))
+        diff_l1_features.append(x_diff.sum(axis=1).A1)
         ids.append(x_val['id'])
         
         x_common_te = pipe_common.transform(test['common_words'].values.tolist())
-        x_diff_te = pipe_diff.transform(test['diff_words'].values.tolist())
+        x_diff_te = tfidf_diff.transform(test['diff_words'].values.tolist())
         common_test_features.append(x_common_te)
-        diff_test_features.append(np.sqrt((x_diff_te * x_diff_te).sum(axis=1)))
+        diff_l2_test_features.append(l2_norm(x_diff_te))
+        diff_l1_test_features.append(x_diff_te.sum(axis=1).A1)
     
     common_features = np.concatenate(common_features)
-    diff_features = np.concatenate(diff_features)[:, None]
+    diff_l2_features = np.concatenate(diff_l2_features)[:, None]
+    diff_l1_features = np.concatenate(diff_l1_features)[:, None]
     ids = np.concatenate(ids)[:, None]
-    train_features = np.concatenate([ids, common_features, diff_features], axis=1).astype(np.float32)
+    train_features = np.concatenate([ids, common_features, diff_l2_features, diff_l1_features], axis=1).astype(np.float32)
     train_features = train_features[np.argsort(train_features[:, 0])].astype(np.float32)
     
     common_test_features = reduce(operator.add, common_test_features) / len(common_test_features)
-    diff_test_features = reduce(operator.add, diff_test_features) / len(diff_test_features)
+    diff_l2_test_features = reduce(operator.add, diff_l2_test_features) / len(diff_l2_test_features)
+    diff_l1_test_features = reduce(operator.add, diff_l1_test_features) / len(diff_l1_test_features)
     test_id = test['test_id'].values[:, None]
-    test_features = np.concatenate([test_id, common_test_features, diff_test_features[:, None]], axis=1).astype(np.float32)
+    test_features = np.concatenate([test_id, common_test_features, diff_l2_test_features[:, None], diff_l1_test_features[:, None]], axis=1).astype(np.float32)
     np.save('artifacts/training/single_pair_tfidf.npy', train_features)
     np.save('artifacts/prediction/single_pair_tfidf.npy', test_features)
 
