@@ -121,9 +121,9 @@ def add_graph_features(df, G, cache, sp_cutoff=1):
 #         'data/test.csv'
 #     )
 # train = bv.train_data
-G = build_graph(train)
-cache = precompute_graph_cahe(G)
+# G = build_graph(train)
+# cache = precompute_graph_cahe(G)
 feats = add_graph_features(train, G, cache, sp_cutoff=1)
 
 #%%
-x['pagerank']
+((feats>0).sum() / (feats.shape[0]*feats.shape[1])).mean()

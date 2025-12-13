@@ -91,7 +91,7 @@ if __name__ == '__main__':
     lda_feats = np.concatenate([id, lda_feats], axis=1)
     lda_feats = lda_feats[np.argsort(lda_feats[:, 0])].astype(np.float32)
     
-    test_features = reduce(operator.add, test_features) / 5
+    test_features = reduce(operator.add, test_features) / len(test_features)
     test_id = test['test_id'].values[:, None]
     test_features = np.concatenate([test_id, test_features], axis=1).astype(np.float32)
     np.save('artifacts/training/lda_features.npy', lda_feats)
