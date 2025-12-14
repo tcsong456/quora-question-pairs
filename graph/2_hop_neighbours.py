@@ -69,8 +69,10 @@ def two_hop_overlap_features(hash_data, neigh, deg,
             ra += 1.0 / dw
             aa += 1.0 / np.log(dw)
         
-        feats.append([inter, jacc, u, v, ra, aa, np.log1p(ra), np.log1p(aa)])
+        feats.append([inter, jacc, len(u), len(v), ra, aa, np.log1p(ra), np.log1p(aa)])
     feats = np.array(feats, dtype=np.float32)
+    id = hash_data[:, [0]].astype(np.float32)
+    feats = np.concatenate([id, feats], axis=1)
     return feats
 
 if __name__ == '__main__':
@@ -82,5 +84,7 @@ if __name__ == '__main__':
     neigh, deg = precompute_neighbors(G)
     train_feats = two_hop_overlap_features(train_hash[:, :-1], neigh, deg)
     test_feats = two_hop_overlap_features(test_hash, neigh, deg)
+    np.save('artifacts/training/2_hop_neigh.npy', train_feats)
+    np.save('artifacts/prediction/2_hop_neigh.npy', test_feats)
 
-#%%
+

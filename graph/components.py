@@ -92,7 +92,5 @@ if __name__ == '__main__':
     X_component_test = np.concatenate([id, X_size, X_dens, X_mdeg, X_xdeg, X_cclust], axis=1)
     np.save('artifacts/training/components.npy', X_component_train)
     np.save('artifacts/prediction/components.npy', X_component_test)
-        
 
-#%%
 
