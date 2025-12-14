@@ -2,12 +2,17 @@ import math
 import numpy as np
 import pandas as pd
 import networkx as nx
-from models.utils.build_vocab import BuildVocab
+from tqdm import tqdm
 
-def build_graph(train_df):
+def build_graph(hash_data):
     G = nx.Graph()
-    pos = train_df.loc[train_df['is_duplicate']==1, ['question1', 'question2']]
-    G.add_edges_from(pos.itertuples(index=False, name=None))
+    if type(hash_data) == list:
+        for dhash in hash_data:
+            for _, h1, h2 in dhash:
+                G.add_edge(h1, h2)
+    else:
+        for _, h1, h2 in hash_data:
+            G.add_edge(h1, h2)
     return G
 
 def precompute_graph_cahe(G):
@@ -50,7 +55,8 @@ def add_graph_features(df, G, cache, sp_cutoff=1):
     
     neighbours = {n:set(G.neighbors(n)) for n in G.nodes()}
     rows = []
-    for u, v in df[['question1', 'question2']].itertuples(index=False, name=None):
+    row_iter = tqdm(df, total=df.shape[0], desc='building graph local features')
+    for _, u, v in row_iter:
         du = deg.get(u, 0)
         dv = deg.get(v, 0)
         deg_min = min(du, dv)
@@ -112,18 +118,19 @@ def add_graph_features(df, G, cache, sp_cutoff=1):
             'pagerank_ratio': pr_ratio
         })
         
-    feats = pd.DataFrame(rows, index=df.index)
+    feats = pd.DataFrame(rows).values
+    id = df[:, [0]].astype(np.float32)
+    feats = np.concatenate([id, feats], axis=1)
     return feats
         
-#%%
-# bv = BuildVocab(
-#         'data/train.csv',
-#         'data/test.csv'
-#     )
-# train = bv.train_data
-# G = build_graph(train)
-# cache = precompute_graph_cahe(G)
-feats = add_graph_features(train, G, cache, sp_cutoff=1)
-
-#%%
-((feats>0).sum() / (feats.shape[0]*feats.shape[1])).mean()
+if __name__ == '__main__':
+    base_path = 'artifacts/'
+    train_hash = np.load(base_path+'train_hash.npy')
+    test_hash = np.load(base_path+'test_hash.npy')
+    
+    G = build_graph([train_hash[:, :-1], test_hash])
+    cache = precompute_graph_cahe(G)
+    train_feats = add_graph_features(train_hash[:, :-1], G, cache, sp_cutoff=4)
+    test_feats = add_graph_features(test_hash, G, cache, sp_cutoff=4)
+    np.save('artifacts/training/graph_local.npy', train_feats)
+    np.save('artifacts/prediction/graph_local.npy', test_feats)
