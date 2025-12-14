@@ -50,5 +50,3 @@ if __name__ == '__main__':
     test_feats = triangle_clustring_features(test_hash, tri, clu)
     np.save('artifacts/training/triangle_clustring.npy', train_feats)
     np.save('artifacts/prediction/triangle_clustring.npy', test_feats)
-
-#%%
