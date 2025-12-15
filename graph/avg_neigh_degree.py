@@ -39,3 +39,4 @@ if __name__ == '__main__':
     np.save('artifacts/training/neighbor_avg_degree.npy', train_nei_stats)
     np.save('artifacts/prediction/neighbor_avg_degree.npy', trest_nei_stats)
 
+#%%
