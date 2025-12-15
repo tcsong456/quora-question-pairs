@@ -1,14 +1,29 @@
 import re
 import spacy
-nlp = spacy.load("en_core_web_sm") 
+import torch
+import numpy as np
+from collections import defaultdict
 
-_WORD_RE = re.compile(r'[a-z]+|\d+(?:\.\d+)?', re.IGNORECASE)
+nlp = spacy.load("en_core_web_sm") 
+_num_re = re.compile(r"^\d+(\.\d+)?$")
+
+# _WORD_RE = re.compile(r'[a-z]+|\d+(?:\.\d+)?', re.IGNORECASE)
+# def tokenize_with_offsets(text):
+#     tokens, offsets = [], []
+#     for m in _WORD_RE.finditer(text):
+#         tok = m.group(0)
+#         tokens.append(tok.lower())
+#         offsets.append((m.start(), m.end()))
+#     return tokens, offsets
+
 def tokenize_with_offsets(text):
+    doc = nlp(text)
     tokens, offsets = [], []
-    for m in _WORD_RE.finditer(text):
-        tok = m.group(0)
-        tokens.append(tok.lower())
-        offsets.append((m.start(), m.end()))
+    for tok in doc:
+        if tok.pos_ == 'PUNCT':
+            continue
+        tokens.append(tok.text.lower())
+        offsets.append((tok.idx, tok.idx+len(tok.text)))
     return tokens, offsets
 
 def char_span_to_token_span(token_offsets, start, end):
@@ -38,7 +53,7 @@ def build_ner_span(text):
         if s >= e:
             continue
         spans.append({
-                'text': ent.text,
+                'text': ent.text.lower(),
                 'label': ent.label_,
                 'start': s,
                 'end': e
@@ -53,20 +68,135 @@ def build_ner_span(text):
             dedup.append(sp)
     return dedup
 
+def norm_tok(t: str) -> str:
+    t = t.lower().strip()
+    t = re.sub(r"^[^\w]+|[^\w]+$", "", t)
+    return t
+
+def is_number(t: str) -> bool:
+    return _num_re.match(t) is not None
+
+def add_rule(P, i, j, conf):
+    if conf >  P[i, j]:
+        P[i, j] = conf
+        
+def get_tokens_lemmas_pos(text):
+    toks = nlp(text)
+    lemma = [tok.lemma_ for tok in toks if tok.pos_ != 'PUNCT']
+    pos = [tok.pos_ for tok in toks if tok.pos_ != 'PUNCT']
+    return lemma, pos
+
+def norm_ent_text(s):
+    s = s.lower().strip()
+    s = re.sub(r"\s+", " ", s)
+    s = re.sub(r"^[^\w]+|[^\w]+$", "", s)
+    return s
+
+def pos_compatible(p1, p2):
+    if p1 is None or p2 is None:
+        return True
+    if p1 == p2:
+        return True
+    if {p1, p2} <= {"AUX", "VERB"}:
+        return True
+    if {p1, p2} <= {"NOUN", "PROPN"}:
+        return True
+    return False
+
+def build_alignment(tokens1, tokens2,
+                    lemma1, lemma2,
+                    pos1, pos2,
+                    ner_span1, ner_span2,
+                    device, topk):
+    L1, L2 = len(tokens1), len(tokens2)
+    P = torch.zeros([L1, L2], device=device, dtype=torch.float32)
+    
+    t1 = [norm_tok(tok) for tok in tokens1]
+    t2 = [norm_tok(tok) for tok in tokens2]
+    
+    tok2_pos = defaultdict(list)
+    for j, w in enumerate(t2):
+        if w:
+            tok2_pos[w].append(j)
+    
+    lemma2_pos = defaultdict(list)
+    for j, w in enumerate(lemma2):
+        w = norm_tok(w)
+        if w:
+            lemma2_pos[w].append(j)
+    
+    for i, w in enumerate(t1):
+        if not w:
+            continue
+        
+        if is_number(w) and w in tok2_pos:
+            for j in tok2_pos[w]:
+                add_rule(P, i, j, 1.0)
+        
+        if len(w) >= 2 and w in tok2_pos:
+            for j in tok2_pos[w]:
+                add_rule(P, i, j, 0.9)
+    
+    ent2 = defaultdict(list)
+    for sp in ner_span2:
+        key = (norm_ent_text(sp['text']), sp['label'])
+        ent2[key] = sp
+    
+    for sp1 in ner_span1:
+        key = (norm_ent_text(sp1['text']), sp1['label'])
+        if key not in ent2:
+            continue
+        
+        label = sp1["label"]
+        if label in {"DATE", "TIME", "MONEY", "PERCENT", "QUANTITY", "CARDINAL", "ORDINAL"}:
+            c = 0.95
+        else:
+            c = 0.85
+
+        for sp2 in ent2.values():
+            for i in range(sp1['start'], sp1['end']):
+                for j in range(sp2['start'], sp2['end']):
+                    add_rule(P, i, j, c)
+    
+    for i, lem in enumerate(lemma1):
+        lem = norm_tok(lem)
+        if not lem or len(lem) < 4:
+            continue
+        if lem not in lemma2_pos:
+            continue
+        
+        if not pos_compatible(pos1[i], pos2[j]):
+            continue
+        add_rule(P, i, j, 0.45)
+    
+    if topk is not None and topk < L2:
+        vals, idx = torch.topk(P, k=topk, dim=1)
+        P2 = torch.zeros_like(P)
+        P2.scatter_(1, idx, vals)
+        P = P2
+    return P
+
+            
 #%%
-_, token_offsets = tokenize_with_offsets(q1)
-import pandas as pd
-# train = pd.read_csv('data/train.csv')
-# q1 = train.loc[100, 'question1']
-# q2 = train.loc[100, 'question2']
-# for m in _WORD_RE.finditer(q):
-#     tok = m.group(0)
-#     print(m.start(), m.end())
-token_offsets
+q = "I cant believe Bank of England increased the interest rate again, more morgages are awaiting33!"
+
+q1 = train.loc[1001, 'question1']
+q2 = train.loc[1001, 'question2']
+tokens1 = [tok.text.lower() for tok in nlp(q1) if tok.pos_ != 'PUNCT']
+tokens2 = [tok.text.lower() for tok in nlp(q2) if tok.pos_ != 'PUNCT']
+lemma1, pos1 = get_tokens_lemmas_pos(q1)
+lemma2, pos2 = get_tokens_lemmas_pos(q2)
+ner_span1 = build_ner_span(q1)
+ner_span2 = build_ner_span(q2)
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+p = build_alignment(tokens1, tokens2,
+                    lemma1, lemma2,
+                    pos1, pos2,
+                    ner_span1, ner_span2,
+                    device=device, topk=3)
     
 #%%
-
-
-doc = nlp('Bank of England increased the interest rate, people will have to pay more morgages')
-for ent in doc.ents:
-    print(ent.start_char, ent.end_char, ent.label_)
+q1 = train.loc[1003, 'question1']
+q2 = train.loc[1003, 'question2']
+q1, q2
+# p
