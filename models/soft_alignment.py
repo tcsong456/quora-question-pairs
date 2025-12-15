@@ -7,66 +7,35 @@ from collections import defaultdict
 nlp = spacy.load("en_core_web_sm") 
 _num_re = re.compile(r"^\d+(\.\d+)?$")
 
-# _WORD_RE = re.compile(r'[a-z]+|\d+(?:\.\d+)?', re.IGNORECASE)
-# def tokenize_with_offsets(text):
-#     tokens, offsets = [], []
-#     for m in _WORD_RE.finditer(text):
-#         tok = m.group(0)
-#         tokens.append(tok.lower())
-#         offsets.append((m.start(), m.end()))
-#     return tokens, offsets
+def featurize_doc(doc, drop_punct=True):
+    tokens, offsets, lemmas, pos = [], [], [], []
+    sp2w = {}
 
-def tokenize_with_offsets(text):
-    doc = nlp(text)
-    tokens, offsets = [], []
     for tok in doc:
-        if tok.pos_ == 'PUNCT':
+        if tok.is_space:
             continue
+        if drop_punct and tok.is_punct:
+            continue
+
+        sp2w[tok.i] = len(tokens)
         tokens.append(tok.text.lower())
-        offsets.append((tok.idx, tok.idx+len(tok.text)))
-    return tokens, offsets
+        offsets.append((tok.idx, tok.idx + len(tok.text)))
+        lemmas.append(tok.lemma_.lower())
+        pos.append(tok.pos_)
 
-def char_span_to_token_span(token_offsets, start, end):
-    start_tok, end_tok = None, None
-    for i, (ts, te) in enumerate(token_offsets):
-        if te <= start:
-            continue
-        if ts >= end:
-            break
-        if start_tok is None:
-            start_tok = i
-        end_tok = i + 1
-        
-    if start_tok is None:
-        return None
-    return start_tok, end_tok
-
-def build_ner_span(text):
-    spans = []
-    tokens, offsets = tokenize_with_offsets(text)
-    doc = nlp(text)
+    ner_spans = []
     for ent in doc.ents:
-        token_span = char_span_to_token_span(offsets, ent.start_char, ent.end_char)
-        if token_span is None:
+        mapped = [sp2w[i] for i in range(ent.start, ent.end) if i in sp2w]
+        if not mapped:
             continue
-        s, e = token_span
-        if s >= e:
-            continue
-        spans.append({
-                'text': ent.text.lower(),
-                'label': ent.label_,
-                'start': s,
-                'end': e
-            })
-    
-    seen = set()
-    dedup = []
-    for sp in spans:
-        key = (sp["start"], sp["end"], sp["label"], sp["text"].strip().lower())
-        if key not in seen:
-            seen.add(key)
-            dedup.append(sp)
-    return dedup
+        ner_spans.append({
+            "text": ent.text,                 # raw surface form
+            "label": ent.label_,              # e.g., GPE, DATE
+            "start": min(mapped),             # inclusive
+            "end": max(mapped) + 1            # exclusive
+        })
+
+    return tokens, offsets, lemmas, pos, ner_spans
 
 def norm_tok(t: str) -> str:
     t = t.lower().strip()
@@ -79,12 +48,6 @@ def is_number(t: str) -> bool:
 def add_rule(P, i, j, conf):
     if conf >  P[i, j]:
         P[i, j] = conf
-        
-def get_tokens_lemmas_pos(text):
-    toks = nlp(text)
-    lemma = [tok.lemma_ for tok in toks if tok.pos_ != 'PUNCT']
-    pos = [tok.pos_ for tok in toks if tok.pos_ != 'PUNCT']
-    return lemma, pos
 
 def norm_ent_text(s):
     s = s.lower().strip()
@@ -176,27 +139,52 @@ def build_alignment(tokens1, tokens2,
         P = P2
     return P
 
+def build_alignments_for_pairs(q1_list, q2_list, *, device, topk=3):
+    assert len(q1_list) == len(q2_list)
+    B = len(q1_list)
+
+    texts = []
+    for a, b in zip(q1_list, q2_list):
+        texts.append(a)
+        texts.append(b)
+
+    docs = list(nlp.pipe(texts, batch_size=min(256, len(texts))))
+
+    alignments = []
+    for b in range(B):
+        doc1 = docs[2*b]
+        doc2 = docs[2*b + 1]
+
+        tokens1, offsets1, lemma1, pos1, ner1 = featurize_doc(doc1, drop_punct=True)
+        tokens2, offsets2, lemma2, pos2, ner2 = featurize_doc(doc2, drop_punct=True)
+
+        P = build_alignment(
+            tokens1, tokens2,
+            lemma1, lemma2,
+            pos1, pos2,
+            ner1, ner2,
+            device=device,
+            topk=topk
+        )
+        alignments.append(P)
+
+    return alignments
             
 #%%
-q = "I cant believe Bank of England increased the interest rate again, more morgages are awaiting33!"
+import time
+import pandas as pd
+# train = pd.read_csv('data/train.csv')
 
-q1 = train.loc[1001, 'question1']
-q2 = train.loc[1001, 'question2']
-tokens1 = [tok.text.lower() for tok in nlp(q1) if tok.pos_ != 'PUNCT']
-tokens2 = [tok.text.lower() for tok in nlp(q2) if tok.pos_ != 'PUNCT']
-lemma1, pos1 = get_tokens_lemmas_pos(q1)
-lemma2, pos2 = get_tokens_lemmas_pos(q2)
-ner_span1 = build_ner_span(q1)
-ner_span2 = build_ner_span(q2)
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-p = build_alignment(tokens1, tokens2,
-                    lemma1, lemma2,
-                    pos1, pos2,
-                    ner_span1, ner_span2,
-                    device=device, topk=3)
-    
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+idxs = np.random.choice(np.arange(train.shape[0]), 64, replace=False)
+q1_list = [train.loc[i, "question1"] for i in idxs]
+q2_list = [train.loc[i, "question2"] for i in idxs]
+
+start = time.time()
+p = build_alignments_for_pairs(q1_list, q2_list, device=device, topk=3)
+elapsed = time.time() - start
+elapsed
 #%%
-q1 = train.loc[1003, 'question1']
-q2 = train.loc[1003, 'question2']
-q1, q2
-# p
+
+    
