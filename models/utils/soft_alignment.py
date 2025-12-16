@@ -41,9 +41,6 @@ def build_alignment(tokens1, tokens2,
                     pos1, pos2,
                     ner_span1, ner_span2,
                     device, topk):
-    L1, L2 = len(tokens1), len(tokens2)
-    P = torch.zeros([L1, L2], device=device, dtype=torch.float32)
-    
     t1 = [norm_tok(tok) for tok in tokens1]
     t2 = [norm_tok(tok) for tok in tokens2]
     
@@ -58,17 +55,19 @@ def build_alignment(tokens1, tokens2,
         if w:
             lemma2_pos[w].append(j)
     
+    pairs = []
     for i, w in enumerate(t1):
         if not w:
             continue
         
         if is_number(w) and w in tok2_pos:
             for j in tok2_pos[w]:
-                add_rule(P, i, j, 1.0)
+                pairs.append((i, j , 1.0))
+            continue
         
         if len(w) >= 2 and w in tok2_pos:
             for j in tok2_pos[w]:
-                add_rule(P, i, j, 0.9)
+                pairs.append((i, j, 0.9))
     
     ent2 = defaultdict(list)
     for sp in ner_span2:
@@ -89,7 +88,8 @@ def build_alignment(tokens1, tokens2,
         for sp2 in ent2.values():
             for i in range(sp1['start'], sp1['end']):
                 for j in range(sp2['start'], sp2['end']):
-                    add_rule(P, i, j, c)
+                    # add_rule(P, i, j, c)
+                    pairs.append((i, j, c))
     
     for i, lem in enumerate(lemma1):
         lem = norm_tok(lem)
@@ -100,14 +100,15 @@ def build_alignment(tokens1, tokens2,
         
         if not pos_compatible(pos1[i], pos2[j]):
             continue
-        add_rule(P, i, j, 0.45)
+        pairs.append((i, j, 0.45))
     
-    if topk is not None and topk < L2:
-        vals, idx = torch.topk(P, k=topk, dim=1)
-        P2 = torch.zeros_like(P)
-        P2.scatter_(1, idx, vals)
-        P = P2
-    return P
+    best_conf = {}
+    for a, b, v in pairs:
+        key = (a, b)
+        if key not in best_conf or v > best_conf[key]:
+            best_conf[key] = v
+    pairs = [(a, b, v) for (a, b), v in best_conf.items()]
+    return pairs
 
 def featurize_doc(doc, drop_punct=True):
     tokens, offsets, lemmas, pos = [], [], [], []

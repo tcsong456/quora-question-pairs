@@ -48,7 +48,7 @@ def sa_collate_fn(
         input_ids = enc['input_ids']
         attention_mask = enc['attention_mask'].bool()
         if mode == 'train':
-            labels = [ex['label'] for ex in batch]
+            labels = torch.tensor([ex['label'] for ex in batch], dtype=torch.int8)
         else:
             labels = None
         
@@ -60,44 +60,41 @@ def sa_collate_fn(
             seq_ids = enc.sequence_ids(batch_index=b)
             
             q1_pos, q2_pos = [], []
-            q1_wid, q2_wid = [], []
-            
+            q1_wid, q2_wid = {}, {}
             for t in range(L):
                 if not attention_mask[b, t]:
                     continue
                 sid = seq_ids[t]
                 wid = word_ids[t]
-                if wid is None:
-                    continue
-                
                 if sid == 0:
                     q1_pos.append(t)
-                    q1_wid.append(wid)
+                    q1_wid.setdefault(wid, []).append(t)
                 elif sid == 1:
                     q2_pos.append(t)
-                    q2_wid.append(wid)
+                    q2_wid.setdefault(wid, []).append(t)
                 
             if not q1_pos or not q2_pos:
                 continue
             
             aligned_pair = aligned_pairs[b]
-            valid_pairs = (aligned_pair > 0).sum()
             q1_pos_t = torch.tensor(q1_pos, dtype=torch.long)
             q2_pos_t = torch.tensor(q2_pos, dtype=torch.long)
             
-            if valid_pairs:
+            if aligned_pair:
                 bias[b][q1_pos_t[:, None], q2_pos_t[None, :]] = -neg_bias
                 bias[b][q2_pos_t[:, None], q1_pos_t[None, :]] = -neg_bias
             
-                for ii, ti in enumerate(q1_pos):
-                    wi = q1_wid[ii]
-                    for jj, tj in enumerate(q2_pos):
-                        wj = q2_wid[jj]
-                        conf = aligned_pair[wi, wj]
-                        if conf > 0:
-                            val = 1.0 * conf
-                            bias[b, ti, tj] = val
-                            bias[b, tj, ti] = val
+                for wi, wj, conf in aligned_pair:
+                    ti_list = q1_wid.get(wi)
+                    tj_list = q2_wid.get(wj)
+                    if not ti_list or not tj_list:
+                        continue
+                    ti = torch.tensor(ti_list, dtype=torch.long)
+                    tj = torch.tensor(tj_list, dtype=torch.long)
+    
+                    val = float(conf)
+                    bias[b][ti[:, None], tj[None, :]] = val
+                    bias[b][tj[:, None], ti[None, :]] = val
     
         return torch.tensor([ex['id'] for ex in batch], dtype=torch.int32), input_ids, attention_mask, bias, labels
     return collate
@@ -160,7 +157,15 @@ dl = DataLoader(
         shuffle=True,
         collate_fn=collate
     )
-for batch in dl:
-    break
+# for batch in dl:
+#     break
 #%%
-batch
+from tqdm import tqdm
+# start = time.time()
+# for batch in tqdm(dl, total=len(dl)):
+#     pass
+# end = time.time() - start
+# end
+
+B, T, C = batch[3].shape
+(batch[3] > 0).sum() / (B*T*C)
