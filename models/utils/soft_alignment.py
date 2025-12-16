@@ -154,27 +154,6 @@ def build_alignments_for_pairs(q1, q2, device, topk=3):
         topk=topk
     )
     return P
-    
-            
-#%%
-import time
-import pandas as pd
-# train = pd.read_csv('data/train.csv')
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-# idxs = np.random.choice(np.arange(train.shape[0]), 64, replace=False)
-# q1_list = [train.loc[i, "question1"] for i in idxs]
-# q2_list = [train.loc[i, "question2"] for i in idxs]
-
-q1 = train.loc[101, "question1"]
-q2 = train.loc[101, "question2"]
-
-start = time.time()
-p = build_alignments_for_pairs(q1, q2, device=device, topk=3)
-elapsed = time.time() - start
-elapsed
-#%%
-p
 
     

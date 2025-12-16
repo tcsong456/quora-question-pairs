@@ -55,6 +55,7 @@ class Trainer:
         self.amp = amp
         self.epochs = epochs
         self.vocab = vocab
+        self.suffix = ''
         
         self.data_train, self.data_val = [], []
         self.models, self.optimizers = [], []
@@ -88,7 +89,6 @@ class Trainer:
                       cnn_base_channels=96,
                       cnn_dropout=0.1
                   ).to(device)
-                self.suffix = ''
             elif model_name == 'esim':
                 assert vec_model is not None 
                 model = ESIM(
@@ -98,17 +98,14 @@ class Trainer:
                     char_dim=100,
                     hidden_dim=200
                   ).to(device)
-                self.suffix = ''
             elif model_name == 'sbert':
                 model = SBERT(
                     model_name="sentence-transformers/all-mpnet-base-v2"
                   ).to(device)
-                self.suffix = ''
             elif model_name == 'deberta':
                 model = DeBertaV3(
                       model_name="microsoft/deberta-v3-base"
                     ).to(device)
-                self.suffix = ''
             
             if model_name not in ['sbert', 'deberta']:
                 optimizer = optim.Adam(model.parameters(),
