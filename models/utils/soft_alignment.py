@@ -3,7 +3,8 @@ import spacy
 import torch
 from collections import defaultdict
 
-nlp = spacy.load("en_core_web_sm") 
+nlp = spacy.load("en_core_web_sm",
+                 disable=["parser"]) 
 _num_re = re.compile(r"^\d+(\.\d+)?$")
 
 def norm_tok(t: str) -> str:
@@ -138,22 +139,43 @@ def featurize_doc(doc, drop_punct=True):
 
     return tokens, offsets, lemmas, pos, ner_spans
 
-def build_alignments_for_pairs(q1, q2, device, topk=3):
-    doc1 = nlp(q1)
-    doc2 = nlp(q2)
+# def build_alignments_for_pairs(q1, q2, device, topk=3):
+#     doc1 = nlp(q1)
+#     doc2 = nlp(q2)
     
-    tokens1, offsets1, lemma1, pos1, ner1 = featurize_doc(doc1, drop_punct=True)
-    tokens2, offsets2, lemma2, pos2, ner2 = featurize_doc(doc2, drop_punct=True)
+#     tokens1, offsets1, lemma1, pos1, ner1 = featurize_doc(doc1, drop_punct=True)
+#     tokens2, offsets2, lemma2, pos2, ner2 = featurize_doc(doc2, drop_punct=True)
     
-    P = build_alignment(
-        tokens1, tokens2,
-        lemma1, lemma2,
-        pos1, pos2,
-        ner1, ner2,
-        device=device,
-        topk=topk
-    )
-    return P
+#     P = build_alignment(
+#         tokens1, tokens2,
+#         lemma1, lemma2,
+#         pos1, pos2,
+#         ner1, ner2,
+#         device=device,
+#         topk=topk
+#     )
+#     return P
+
+def build_alignments_for_batch(q1_list, q2_list, device, topk=3, batch_size=64):
+    docs1 = list(nlp.pipe(q1_list, batch_size=batch_size))
+    docs2 = list(nlp.pipe(q2_list, batch_size=batch_size))
+
+    aligned_pairs = []
+    for doc1, doc2 in zip(docs1, docs2):
+        tokens1, offsets1, lemma1, pos1, ner1 = featurize_doc(doc1, drop_punct=True)
+        tokens2, offsets2, lemma2, pos2, ner2 = featurize_doc(doc2, drop_punct=True)
+
+        P = build_alignment(
+            tokens1, tokens2,
+            lemma1, lemma2,
+            pos1, pos2,
+            ner1, ner2,
+            device=device,
+            topk=topk
+        )
+        aligned_pairs.append(P)
+
+    return aligned_pairs
 
 
     
