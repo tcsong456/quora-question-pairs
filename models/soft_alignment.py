@@ -1,41 +1,10 @@
 import re
 import spacy
 import torch
-import numpy as np
 from collections import defaultdict
 
 nlp = spacy.load("en_core_web_sm") 
 _num_re = re.compile(r"^\d+(\.\d+)?$")
-
-def featurize_doc(doc, drop_punct=True):
-    tokens, offsets, lemmas, pos = [], [], [], []
-    sp2w = {}
-
-    for tok in doc:
-        if tok.is_space:
-            continue
-        if drop_punct and tok.is_punct:
-            continue
-
-        sp2w[tok.i] = len(tokens)
-        tokens.append(tok.text.lower())
-        offsets.append((tok.idx, tok.idx + len(tok.text)))
-        lemmas.append(tok.lemma_.lower())
-        pos.append(tok.pos_)
-
-    ner_spans = []
-    for ent in doc.ents:
-        mapped = [sp2w[i] for i in range(ent.start, ent.end) if i in sp2w]
-        if not mapped:
-            continue
-        ner_spans.append({
-            "text": ent.text,                 # raw surface form
-            "label": ent.label_,              # e.g., GPE, DATE
-            "start": min(mapped),             # inclusive
-            "end": max(mapped) + 1            # exclusive
-        })
-
-    return tokens, offsets, lemmas, pos, ner_spans
 
 def norm_tok(t: str) -> str:
     t = t.lower().strip()
@@ -139,36 +108,53 @@ def build_alignment(tokens1, tokens2,
         P = P2
     return P
 
-def build_alignments_for_pairs(q1_list, q2_list, *, device, topk=3):
-    assert len(q1_list) == len(q2_list)
-    B = len(q1_list)
+def featurize_doc(doc, drop_punct=True):
+    tokens, offsets, lemmas, pos = [], [], [], []
+    sp2w = {}
 
-    texts = []
-    for a, b in zip(q1_list, q2_list):
-        texts.append(a)
-        texts.append(b)
+    for tok in doc:
+        if tok.is_space:
+            continue
+        if drop_punct and tok.is_punct:
+            continue
 
-    docs = list(nlp.pipe(texts, batch_size=min(256, len(texts))))
+        sp2w[tok.i] = len(tokens)
+        tokens.append(tok.text.lower())
+        offsets.append((tok.idx, tok.idx + len(tok.text)))
+        lemmas.append(tok.lemma_.lower())
+        pos.append(tok.pos_)
 
-    alignments = []
-    for b in range(B):
-        doc1 = docs[2*b]
-        doc2 = docs[2*b + 1]
+    ner_spans = []
+    for ent in doc.ents:
+        mapped = [sp2w[i] for i in range(ent.start, ent.end) if i in sp2w]
+        if not mapped:
+            continue
+        ner_spans.append({
+            "text": ent.text,
+            "label": ent.label_,
+            "start": min(mapped),
+            "end": max(mapped) + 1
+        })
 
-        tokens1, offsets1, lemma1, pos1, ner1 = featurize_doc(doc1, drop_punct=True)
-        tokens2, offsets2, lemma2, pos2, ner2 = featurize_doc(doc2, drop_punct=True)
+    return tokens, offsets, lemmas, pos, ner_spans
 
-        P = build_alignment(
-            tokens1, tokens2,
-            lemma1, lemma2,
-            pos1, pos2,
-            ner1, ner2,
-            device=device,
-            topk=topk
-        )
-        alignments.append(P)
-
-    return alignments
+def build_alignments_for_pairs(q1, q2, device, topk=3):
+    doc1 = nlp(q1)
+    doc2 = nlp(q2)
+    
+    tokens1, offsets1, lemma1, pos1, ner1 = featurize_doc(doc1, drop_punct=True)
+    tokens2, offsets2, lemma2, pos2, ner2 = featurize_doc(doc2, drop_punct=True)
+    
+    P = build_alignment(
+        tokens1, tokens2,
+        lemma1, lemma2,
+        pos1, pos2,
+        ner1, ner2,
+        device=device,
+        topk=topk
+    )
+    return P
+    
             
 #%%
 import time
@@ -177,14 +163,18 @@ import pandas as pd
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-idxs = np.random.choice(np.arange(train.shape[0]), 64, replace=False)
-q1_list = [train.loc[i, "question1"] for i in idxs]
-q2_list = [train.loc[i, "question2"] for i in idxs]
+# idxs = np.random.choice(np.arange(train.shape[0]), 64, replace=False)
+# q1_list = [train.loc[i, "question1"] for i in idxs]
+# q2_list = [train.loc[i, "question2"] for i in idxs]
+
+q1 = train.loc[101, "question1"]
+q2 = train.loc[101, "question2"]
 
 start = time.time()
-p = build_alignments_for_pairs(q1_list, q2_list, device=device, topk=3)
+p = build_alignments_for_pairs(q1, q2, device=device, topk=3)
 elapsed = time.time() - start
 elapsed
 #%%
+p
 
     
