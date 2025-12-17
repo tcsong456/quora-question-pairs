@@ -1,6 +1,6 @@
 import re
 import spacy
-import torch
+from tqdm import tqdm
 from collections import defaultdict
 
 nlp = spacy.load("en_core_web_sm",
@@ -39,8 +39,7 @@ def pos_compatible(p1, p2):
 def build_alignment(tokens1, tokens2,
                     lemma1, lemma2,
                     pos1, pos2,
-                    ner_span1, ner_span2,
-                    device, topk):
+                    ner_span1, ner_span2):
     t1 = [norm_tok(tok) for tok in tokens1]
     t2 = [norm_tok(tok) for tok in tokens2]
     
@@ -76,7 +75,8 @@ def build_alignment(tokens1, tokens2,
     
     for sp1 in ner_span1:
         key = (norm_ent_text(sp1['text']), sp1['label'])
-        if key not in ent2:
+        sp2 = ent2.get(key)
+        if sp2 is None:
             continue
         
         label = sp1["label"]
@@ -85,22 +85,22 @@ def build_alignment(tokens1, tokens2,
         else:
             c = 0.85
 
-        for sp2 in ent2.values():
-            for i in range(sp1['start'], sp1['end']):
-                for j in range(sp2['start'], sp2['end']):
-                    # add_rule(P, i, j, c)
-                    pairs.append((i, j, c))
+        for i in range(sp1['start'], sp1['end']):
+            for j in range(sp2['start'], sp2['end']):
+                pairs.append((i, j, c))
     
     for i, lem in enumerate(lemma1):
         lem = norm_tok(lem)
         if not lem or len(lem) < 4:
             continue
-        if lem not in lemma2_pos:
+        js = lemma2_pos.get(lem)
+        if not js:
             continue
         
-        if not pos_compatible(pos1[i], pos2[j]):
-            continue
-        pairs.append((i, j, 0.45))
+        p1 = pos1[i]
+        for j in js:
+            if pos_compatible(p1, pos2[j]): 
+                pairs.append((i, j, 0.45))
     
     best_conf = {}
     for a, b, v in pairs:
@@ -140,43 +140,25 @@ def featurize_doc(doc, drop_punct=True):
 
     return tokens, offsets, lemmas, pos, ner_spans
 
-# def build_alignments_for_pairs(q1, q2, device, topk=3):
-#     doc1 = nlp(q1)
-#     doc2 = nlp(q2)
-    
-#     tokens1, offsets1, lemma1, pos1, ner1 = featurize_doc(doc1, drop_punct=True)
-#     tokens2, offsets2, lemma2, pos2, ner2 = featurize_doc(doc2, drop_punct=True)
-    
-#     P = build_alignment(
-#         tokens1, tokens2,
-#         lemma1, lemma2,
-#         pos1, pos2,
-#         ner1, ner2,
-#         device=device,
-#         topk=topk
-#     )
-#     return P
-
-def build_alignments_for_batch(q1_list, q2_list, device, topk=3, batch_size=64):
-    docs1 = list(nlp.pipe(q1_list, batch_size=batch_size))
-    docs2 = list(nlp.pipe(q2_list, batch_size=batch_size))
-
+def build_alignments_for_batch(q1_list, q2_list, feat_cache):
     aligned_pairs = []
-    for doc1, doc2 in zip(docs1, docs2):
-        tokens1, offsets1, lemma1, pos1, ner1 = featurize_doc(doc1, drop_punct=True)
-        tokens2, offsets2, lemma2, pos2, ner2 = featurize_doc(doc2, drop_punct=True)
+    for q1, q2 in zip(q1_list, q2_list):
+        tokens1, offsets1, lemma1, pos1, ner1 = feat_cache[q1]
+        tokens2, offsets2, lemma2, pos2, ner2 = feat_cache[q2]
 
-        P = build_alignment(
-            tokens1, tokens2,
-            lemma1, lemma2,
-            pos1, pos2,
-            ner1, ner2,
-            device=device,
-            topk=topk
-        )
+        P = build_alignment(tokens1, tokens2, lemma1, lemma2, pos1, pos2, ner1, ner2)
         aligned_pairs.append(P)
 
     return aligned_pairs
 
+def build_question_feature_cache(texts, nlp, batch_size=2048):
+    cache = {}
+    uniq = list(dict.fromkeys(texts))
 
+    for doc, text in zip(
+        tqdm(nlp.pipe(uniq, batch_size=batch_size), total=len(uniq)),
+        uniq):
+        cache[text] = featurize_doc(doc, drop_punct=True)
+
+    return cache
     

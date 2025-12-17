@@ -1,17 +1,11 @@
-import re
+import pickle
 import torch
 import spacy
+from spacy.lang.en import English
 from torch.utils.data import Dataset
 from transformers import AutoTokenizer
-from models.utils.soft_alignment import build_alignments_for_batch
-
-def simple_word_tokenizer(text):
-    _WORD_RE = re.compile(r"[a-zA-Z]+|\d+(?:\.\d+)?")
-    return _WORD_RE.findall(text)
-nlp_tok = spacy.load(
-    "en_core_web_sm",
-    disable=["parser", "ner"]
-)
+from models.utils.build_vocab import BuildVocab
+from models.utils.soft_alignment import build_alignments_for_batch, build_question_feature_cache
 
 def spacy_tokens_drop_punct(doc):
     return [t.text for t in doc if not t.is_space and not t.is_punct]
@@ -21,19 +15,17 @@ def sa_collate_fn(
     neg_bias,
     max_len,
     batch_size=32,
-    mode='train'
+    mode='train',
+    feat_cache=None
     ):
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
     def collate(batch):
         q1_raw = [ex['question1'] for ex in batch]
         q2_raw = [ex['question2'] for ex in batch]
-        docs1 = list(nlp_tok.pipe(q1_raw, batch_size=batch_size))
-        docs2 = list(nlp_tok.pipe(q2_raw, batch_size=batch_size))
-        
-        q1_words = [spacy_tokens_drop_punct(d) for d in docs1]
-        q2_words = [spacy_tokens_drop_punct(d) for d in docs2]
-        aligned_pairs = build_alignments_for_batch(q1_raw, q2_raw, device=device, topk=3, batch_size=batch_size)
+        q1_words = [ex["q1_words"] for ex in batch]
+        q2_words = [ex["q2_words"] for ex in batch]
+        assert feat_cache is not None, 'aligned pairs need feat cache to build'
+        aligned_pairs = build_alignments_for_batch(q1_raw, q2_raw, feat_cache)
 
         
         enc = tokenizer(
@@ -99,6 +91,14 @@ def sa_collate_fn(
         return torch.tensor([ex['id'] for ex in batch], dtype=torch.int32), input_ids, attention_mask, bias, labels
     return collate
 
+def build_feat_cache(df, nlp_tok, mode='train', batch_size=32):
+    all_questions = df['question1'].values.tolist() + df['question2'].values.tolist()
+    feat_cache = build_question_feature_cache(all_questions, nlp_tok, batch_size=batch_size)
+    assert mode in ['train', 'test'], 'mode can only be train or test'
+    save_path = f'artifacts/{mode}_question_lexical.pkl'
+    with open(save_path, 'wb') as f:
+        pickle.dump(feat_cache, f, protocol=pickle.HIGHEST_PROTOCOL)
+
 class SaDataset(Dataset):
     def __init__(self,
                  bv,
@@ -110,6 +110,14 @@ class SaDataset(Dataset):
         self.data = data
         self.mode = mode
         self.max_len = 40
+        
+        nlp_tok = English()
+        q1 = data["question1"].tolist()
+        q2 = data["question2"].tolist()
+        docs1 = list(nlp_tok.pipe(q1, batch_size=1024))
+        docs2 = list(nlp_tok.pipe(q2, batch_size=1024))
+        self.q1_words = [spacy_tokens_drop_punct(d) for d in docs1]
+        self.q2_words = [spacy_tokens_drop_punct(d) for d in docs2]
     
     def __len__(self):
       return len(self.q_idx)
@@ -123,6 +131,8 @@ class SaDataset(Dataset):
             label = row['is_duplicate']
             return {
                     'id': row['id'],
+                    'q1_words': self.q1_words[idx],
+                    'q2_words': self.q2_words[idx],
                     'question1': q1,
                     'question2': q2,
                     'label': label
@@ -130,42 +140,50 @@ class SaDataset(Dataset):
         else:
             return {
                     'id': row['test_id'],
+                    'q1_words': self.q1_words[idx],
+                    'q2_words': self.q2_words[idx],
                     'question1': q1,
                     'question2': q2
                     }
 
+if __name__ == '__main__':
+    bv = BuildVocab('data/train.csv',
+                    'data/test.csv')
+    train = bv.train_data
+    test = bv.test_data
+    
+    nlp = spacy.load("en_core_web_sm",
+                      disable=["parser"]) 
+    build_feat_cache(train, nlp, mode='train', batch_size=128)
+    build_feat_cache(test, nlp, mode='test', batch_size=512)
+
 #%%
-import numpy as np
-from torch.utils.data import DataLoader
-from models.utils.build_vocab import BuildVocab
+# import numpy as np
+# from torch.utils.data import DataLoader
+
 # bv = BuildVocab('data/train.csv',
 #                 'data/test.csv')
 # train = bv.train_data
 # test = bv.test_data
-dataset = SaDataset(bv, np.arange(train.shape[0]),
-                    mode='train')
-collate = sa_collate_fn(
-    tokenizer_name="microsoft/deberta-v3-base",
-    neg_bias=2.0,
-    max_len=80,
-    mode='train',
-    batch_size=64
-    )
-dl = DataLoader(
-        dataset,
-        batch_size=64,
-        shuffle=True,
-        collate_fn=collate
-    )
-# for batch in dl:
-#     break
-#%%
-from tqdm import tqdm
-# start = time.time()
-# for batch in tqdm(dl, total=len(dl)):
-#     pass
-# end = time.time() - start
-# end
 
-B, T, C = batch[3].shape
-(batch[3] > 0).sum() / (B*T*C)
+# with open('artifacts/question_lexical_features.pkl', 'rb') as f:
+#     feat_cache = pickle.load(f)
+    
+# dataset = SaDataset(bv, np.arange(train.shape[0]),
+#                     mode='train')
+# collate = sa_collate_fn(
+#     tokenizer_name="microsoft/deberta-v3-base",
+#     neg_bias=2.0,
+#     max_len=80,
+#     mode='train',
+#     batch_size=64,
+#     feat_cache=feat_cache
+#     )
+# dl = DataLoader(
+#         dataset,
+#         batch_size=64,
+#         shuffle=True,
+#         collate_fn=collate
+    # )
+
+#%%
