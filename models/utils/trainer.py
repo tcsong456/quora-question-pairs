@@ -14,7 +14,9 @@ from models.diin import DIIN
 from models.esim import ESIM
 from models.sbert import SBERT
 from models.deberta import DeBertaV3
+from models.bias_deberta import DebertaV3BiasedClassifier
 from models.utils.build_vocab import BuildVocab
+from models.utils.sa_dataset import SaDataset, sa_collate_fn
 from models.utils.dataset import QQPDataset, SBERTDataset, DeBERTaV3Dataset
 from torch.utils.data import DataLoader
 from torch.cuda.amp import autocast, GradScaler
@@ -56,6 +58,7 @@ class Trainer:
         self.epochs = epochs
         self.vocab = vocab
         self.suffix = ''
+        self.collate_fn = None
         
         self.data_train, self.data_val = [], []
         self.models, self.optimizers = [], []
@@ -106,8 +109,11 @@ class Trainer:
                 model = DeBertaV3(
                       model_name="microsoft/deberta-v3-base"
                     ).to(device)
+            elif model_name == 'attention_bias':
+                model = DebertaV3BiasedClassifier(model_name="microsoft/deberta-v3-base",
+                                                  hidden_proj=128).cuda()
             
-            if model_name not in ['sbert', 'deberta']:
+            if model_name not in ['sbert', 'deberta', 'attention_bias']:
                 optimizer = optim.Adam(model.parameters(),
                                         lr=0.002)
                 dataset = QQPDataset
@@ -142,8 +148,21 @@ class Trainer:
                     )
                 if model_name == 'deberta':
                     dataset = DeBERTaV3Dataset
-                else:
+                elif model_name == 'sbert':
                     dataset = SBERTDataset
+                elif model_name == 'attention_bias':
+                    dataset = SaDataset
+                    import pickle
+                    with open('artifacts/train_question_lexical.pkl', 'rb') as f:
+                        feat_cache = pickle.load(f)
+                    self.collate_fn = sa_collate_fn(
+                            tokenizer_name="microsoft/deberta-v3-base",
+                            neg_bias=0.3,
+                            max_len=80,
+                            mode='train',
+                            batch_size=batch_size,
+                            feat_cache=feat_cache
+                        )
                     
             self.optimizers.append(optimizer)
             self.models.append(model)
@@ -187,16 +206,18 @@ class Trainer:
         train_dataloader = DataLoader(
             train_dataset,
             shuffle=True,
-            batch_size=self.batch_size
+            batch_size=self.batch_size,
+            collate_fn=self.collate_fn
           )
         val_dataloader = DataLoader(
             val_dataset,
             shuffle=False,
-            batch_size=self.test_batch_size
+            batch_size=self.test_batch_size,
+            collate_fn=self.collate_fn
           )
         
         os.makedirs('artifacts/training', exist_ok=True)
-        if self.model_name in ['sbert', 'deberta']:
+        if self.model_name in ['sbert', 'deberta', 'attention_bias']:
             total_steps = 2 * int(self.train_data.shape[0] * 0.8 // self.batch_size + 1)
             warmup_steps = int(0.1 * total_steps)
             scheduler = get_linear_schedule_with_warmup(
@@ -204,6 +225,8 @@ class Trainer:
             num_warmup_steps=warmup_steps,
             num_training_steps=total_steps,
         )
+            if self.model_name == 'attention_bias':
+                global_step = 0
         for epoch in range(start_epoch, self.epochs):
             model.train()
             train_dl = tqdm(train_dataloader,
@@ -215,10 +238,13 @@ class Trainer:
                     if isinstance(v, torch.Tensor):
                         batch[i] = v.to(self.device)
                 
+                if self.model_name == 'attention_bias' and global_step <= warmup_steps:
+                    global_step += 1
+                    scale = 0.5 * global_step / warmup_steps
                 optimizer.zero_grad()
                 y_true = batch[-1]
                 with autocast(enabled=self.amp):
-                    y_pred = model(batch)
+                    y_pred = model(batch, bias_scale=scale)
                     loss = self.loss_fn(y_pred.view(-1), y_true.float())
                 
                 scaler.scale(loss).backward()
@@ -226,7 +252,7 @@ class Trainer:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 scaler.step(optimizer)
                 scaler.update()
-                if self.model_name in ['sbert', 'deberta']:
+                if self.model_name in ['sbert', 'deberta', 'attention_bias']:
                     scheduler.step()
                 
                 loss_meter_tr.update(loss.item(), 1)
