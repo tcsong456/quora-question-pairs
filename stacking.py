@@ -10,7 +10,7 @@ def build_data(mode='train'):
     dfs = []
     ft_name = ['bimpm_features_multi_head', 'diin_features', 'esim_features', 'sbert_features', 'deberta_features',
                'lda_features', 'single_pair_tfidf', 'double_pair_tfidf', 'graph_local', 'basic_feats', 'neighbor_avg_degree',
-               'kcore', 'katz', 'triangle_clustring', 'components', '2_hop_neigh', 'type_matches']
+               'kcore', 'katz', 'triangle_clustring', 'components', '2_hop_neigh']
     for f in ft_name:
         model = f.split('_')[0]
         f = f'artifacts/{location}/{f}.npy'
