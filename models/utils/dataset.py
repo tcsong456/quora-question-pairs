@@ -133,20 +133,5 @@ class DeBERTaV3Dataset(Dataset):
             return row['id'], input_ids, att_mask, label
         else:
             return row['test_id'], input_ids, att_mask
-#%%
-# import numpy as np
-# from models.utils.build_vocab import BuildVocab
-# from torch.utils.data import DataLoader
-# bv = BuildVocab(
-#         'data/train.csv',
-#         'data/test.csv'
-#     )
-# train = bv.train_data
-# dataset = QQPDataset(bv, np.arange(train.shape[0]), mode='train')
-# dl = DataLoader(dataset,
-#                 batch_size=64,
-#                 shuffle=False)
-# for batch in dl:
-#     break
 
         

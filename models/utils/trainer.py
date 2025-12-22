@@ -14,7 +14,8 @@ from models.diin import DIIN
 from models.esim import ESIM
 from models.sbert import SBERT
 from models.deberta import DeBertaV3
-from models.self_design_1 import SelfDesignV1
+# from models.self_design_1 import SelfDesignV1
+from models.self_design import SelfDesignV1
 from models.utils.build_vocab import BuildVocab
 from models.utils.dataset import QQPDataset, SBERTDataset, DeBERTaV3Dataset
 from torch.utils.data import DataLoader
