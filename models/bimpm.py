@@ -250,7 +250,7 @@ class BiMPM(nn.Module):
         return x * weights
     
     def _post_attn_process(self, logits, mask, pad_mask):    
-        logits = mask * logits + (1 - mask) * 1e-9
+        logits = mask * logits + (1 - mask) * -1e9
         logits = logits - torch.max(logits, dim=-1, keepdim=True)[0]
         attn = torch.exp(logits)
         attn = attn * pad_mask

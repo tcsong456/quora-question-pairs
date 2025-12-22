@@ -14,6 +14,7 @@ from models.diin import DIIN
 from models.esim import ESIM
 from models.sbert import SBERT
 from models.deberta import DeBertaV3
+from models.self_design_1 import SelfDesignV1
 from models.utils.build_vocab import BuildVocab
 from models.utils.dataset import QQPDataset, SBERTDataset, DeBERTaV3Dataset
 from torch.utils.data import DataLoader
@@ -99,6 +100,14 @@ class Trainer:
                     char_dim=100,
                     hidden_dim=200
                   ).to(device)
+            elif model_name == 'self_1':
+                model = SelfDesignV1(
+                        emb_dim=300,
+                        hidden_size=150,
+                        words_index_dict=words_index_dict,
+                        max_len=40,
+                        vec_model=vec_model
+                    ).to(device)
             elif model_name == 'sbert':
                 model = SBERT(
                     model_name="sentence-transformers/all-mpnet-base-v2"
@@ -381,7 +390,7 @@ if __name__ == '__main__':
     bv = BuildVocab('data/train.csv',
                     'data/test.csv')
     bv.build_char_vocab()
-    if args.model_name == 'bimpm':
+    if args.model_name in ['bimpm', 'self_1']:
         vec_model = load_facebook_model('artifacts/cc.en.300.bin')
     elif args.model_name in ['diin', 'esim']:
         glove = {}
