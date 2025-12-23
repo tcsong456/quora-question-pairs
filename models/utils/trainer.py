@@ -13,6 +13,7 @@ from models.bimpm import BiMPM
 from models.diin import DIIN
 from models.esim import ESIM
 from models.sbert import SBERT
+from models.transformer_diin import TransformerDIIN
 from models.deberta import DeBertaV3
 from models.utils.build_vocab import BuildVocab
 from models.utils.dataset import QQPDataset, SBERTDataset, DeBERTaV3Dataset
@@ -107,8 +108,35 @@ class Trainer:
                 model = DeBertaV3(
                       model_name="microsoft/deberta-v3-base"
                     ).to(device)
+            elif model_name == 'transformer_diin':
+                model = TransformerDIIN(
+                        emb_dim=300,
+                        words_index_dict=words_index_dict,
+                        max_len=40,
+                        vec_model=vec_model
+                    ).to(device)
             
-            if model_name not in ['sbert', 'deberta']:
+            if model_name == 'transformer_diin':
+                lr_enc=2e-4; lr_head=1e-3; wd=0.01
+                enc_params, head_params = [], []
+                for n, p in model.named_parameters():
+                    if not p.requires_grad:
+                        continue
+                    if n.startswith("encoder.") or  ".encoder." in n:
+                        enc_params.append(p)
+                    else:
+                        head_params.append(p)
+            
+                optimizer = torch.optim.AdamW(
+                    [
+                        {"params": enc_params, "lr": lr_enc, "weight_decay": wd},
+                        {"params": head_params, "lr": lr_head, "weight_decay": wd},
+                    ],
+                    betas=(0.9, 0.98),
+                    eps=1e-8
+                )
+                dataset = QQPDataset
+            elif model_name not in ['sbert', 'deberta']:
                 optimizer = optim.Adam(model.parameters(),
                                         lr=0.002)
                 dataset = QQPDataset
@@ -199,7 +227,7 @@ class Trainer:
           )
         
         os.makedirs('artifacts/training', exist_ok=True)
-        if self.model_name in ['sbert', 'deberta']:
+        if self.model_name in ['sbert', 'deberta', 'transformer_diin']:
             total_steps = 2 * int(self.train_data.shape[0] * 0.8 // self.batch_size + 1)
             warmup_steps = int(0.1 * total_steps)
             scheduler = get_linear_schedule_with_warmup(
@@ -229,7 +257,7 @@ class Trainer:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 scaler.step(optimizer)
                 scaler.update()
-                if self.model_name in ['sbert', 'deberta']:
+                if self.model_name in ['sbert', 'deberta', 'transformer_diin']:
                     scheduler.step()
                 
                 loss_meter_tr.update(loss.item(), 1)
@@ -381,7 +409,7 @@ if __name__ == '__main__':
     bv = BuildVocab('data/train.csv',
                     'data/test.csv')
     bv.build_char_vocab()
-    if args.model_name in ['bimpm', 'self_1']:
+    if args.model_name in ['bimpm', 'transformer_diin']:
         vec_model = load_facebook_model('artifacts/cc.en.300.bin')
     elif args.model_name in ['diin', 'esim']:
         glove = {}
