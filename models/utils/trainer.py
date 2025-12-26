@@ -13,6 +13,7 @@ from models.bimpm import BiMPM
 from models.diin import DIIN
 from models.esim import ESIM
 from models.sbert import SBERT
+from models.transformer_diin import TransformerDIIN
 from models.deberta import DeBertaV3
 from models.utils.build_vocab import BuildVocab
 from models.utils.dataset import QQPDataset, SBERTDataset, DeBERTaV3Dataset
@@ -55,6 +56,7 @@ class Trainer:
         self.amp = amp
         self.epochs = epochs
         self.vocab = vocab
+        self.suffix = ''
         
         self.data_train, self.data_val = [], []
         self.models, self.optimizers = [], []
@@ -88,7 +90,6 @@ class Trainer:
                       cnn_base_channels=96,
                       cnn_dropout=0.1
                   ).to(device)
-                self.suffix = ''
             elif model_name == 'esim':
                 assert vec_model is not None 
                 model = ESIM(
@@ -98,19 +99,43 @@ class Trainer:
                     char_dim=100,
                     hidden_dim=200
                   ).to(device)
-                self.suffix = ''
             elif model_name == 'sbert':
                 model = SBERT(
                     model_name="sentence-transformers/all-mpnet-base-v2"
                   ).to(device)
-                self.suffix = ''
             elif model_name == 'deberta':
                 model = DeBertaV3(
                       model_name="microsoft/deberta-v3-base"
                     ).to(device)
-                self.suffix = ''
+            elif model_name == 'transformer_diin':
+                model = TransformerDIIN(
+                        emb_dim=300,
+                        words_index_dict=words_index_dict,
+                        max_len=40,
+                        vec_model=vec_model
+                    ).to(device)
             
-            if model_name not in ['sbert', 'deberta']:
+            if model_name == 'transformer_diin':
+                lr_enc=2e-4; lr_head=1e-3; wd=0.01
+                enc_params, head_params = [], []
+                for n, p in model.named_parameters():
+                    if not p.requires_grad:
+                        continue
+                    if n.startswith("encoder.") or  ".encoder." in n:
+                        enc_params.append(p)
+                    else:
+                        head_params.append(p)
+            
+                optimizer = torch.optim.AdamW(
+                    [
+                        {"params": enc_params, "lr": lr_enc, "weight_decay": wd},
+                        {"params": head_params, "lr": lr_head, "weight_decay": wd},
+                    ],
+                    betas=(0.9, 0.98),
+                    eps=1e-8
+                )
+                dataset = QQPDataset
+            elif model_name not in ['sbert', 'deberta']:
                 optimizer = optim.Adam(model.parameters(),
                                         lr=0.002)
                 dataset = QQPDataset
@@ -145,7 +170,7 @@ class Trainer:
                     )
                 if model_name == 'deberta':
                     dataset = DeBERTaV3Dataset
-                else:
+                elif model_name == 'sbert':
                     dataset = SBERTDataset
                     
             self.optimizers.append(optimizer)
@@ -182,24 +207,25 @@ class Trainer:
         loss_meter_val = AverageMeter()
         
         train_dataset = self.dataset(bv=self.vocab,
-                                   q_idx=train_idx,
-                                   mode='train')
+                                    q_idx=train_idx,
+                                    mode='train')
         val_dataset = self.dataset(bv=self.vocab,
                                  q_idx=val_idx,
                                  mode='val')
+            
         train_dataloader = DataLoader(
             train_dataset,
             shuffle=True,
-            batch_size=self.batch_size
+            batch_size=self.batch_size,
           )
         val_dataloader = DataLoader(
             val_dataset,
             shuffle=False,
-            batch_size=self.test_batch_size
+            batch_size=self.test_batch_size,
           )
-        
+
         os.makedirs('artifacts/training', exist_ok=True)
-        if self.model_name in ['sbert', 'deberta']:
+        if self.model_name in ['sbert', 'deberta', 'transformer_diin']:
             total_steps = 2 * int(self.train_data.shape[0] * 0.8 // self.batch_size + 1)
             warmup_steps = int(0.1 * total_steps)
             scheduler = get_linear_schedule_with_warmup(
@@ -229,10 +255,11 @@ class Trainer:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 scaler.step(optimizer)
                 scaler.update()
-                if self.model_name in ['sbert', 'deberta']:
+                if self.model_name in ['sbert', 'deberta', 'transformer_diin']:
                     scheduler.step()
                 
-                loss_meter_tr.update(loss.item(), 1)
+                bs = y_true.numel()
+                loss_meter_tr.update(loss.item(), bs)
                 loss = loss_meter_tr.average
                 train_dl.set_postfix({
                     f'epoch {epoch} loss': f'{loss:.5f}',
@@ -255,10 +282,11 @@ class Trainer:
                     with autocast(enabled=self.amp):
                         yp, feature = model(batch, return_embedding=True)
                         val_loss = self.loss_fn(yp.view(-1), yt.float())
-                        features.append(feature)
+                        features.append(feature.detach().cpu())
                     id = batch[0].cpu().numpy()
                     ids.append(id)
-                    loss_meter_val.update(val_loss, 1)
+                    bs = yt.numel()
+                    loss_meter_val.update(val_loss.item(), bs)
                     val_loss = loss_meter_val.average
                     val_dl.set_postfix({
                         f'epoch {epoch} loss': f'{val_loss: .5f}'
@@ -381,7 +409,7 @@ if __name__ == '__main__':
     bv = BuildVocab('data/train.csv',
                     'data/test.csv')
     bv.build_char_vocab()
-    if args.model_name == 'bimpm':
+    if args.model_name in ['bimpm', 'transformer_diin']:
         vec_model = load_facebook_model('artifacts/cc.en.300.bin')
     elif args.model_name in ['diin', 'esim']:
         glove = {}
@@ -409,9 +437,7 @@ if __name__ == '__main__':
         batch_size=args.batch_size,
         test_batch_size=args.test_batch_size
       )
-    # for fold, warm_start in zip(args.training_folds, args.warm_start_folds):
-    #     trainer.train(fold, warm_start=warm_start)
+    for fold, warm_start in zip(args.training_folds, args.warm_start_folds):
+        trainer.train(fold, warm_start=warm_start)
     trainer.predict()
     trainer.merge()
-    
-  #%%

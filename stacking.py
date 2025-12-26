@@ -8,7 +8,9 @@ def build_data(mode='train'):
     assert mode in ['train', 'test']
     location = 'training' if mode == 'train' else 'prediction'
     dfs = []
-    ft_name = ['bimpm_features_multi_head', 'diin_features', 'esim_features', 'sbert_features', 'deberta_features']
+    ft_name = ['bimpm_features_multi_head', 'diin_features', 'esim_features', 'sbert_features', 'deberta_features', 'transformer_diin_features',
+               'lda_features', 'single_pair_tfidf', 'double_pair_tfidf', 'graph_local', 'basic_feats', 'neighbor_avg_degree',
+               'kcore', 'katz', 'triangle_clustring', 'components', '2_hop_neigh', 'n2v']
     for f in ft_name:
         model = f.split('_')[0]
         f = f'artifacts/{location}/{f}.npy'
@@ -30,10 +32,10 @@ def build_data(mode='train'):
         return test_id, x_meta
 
 params = {
-    'num_leaves': 80,
+    'num_leaves': 120,
     "objective": "binary",
     "metric": "binary_logloss",
-    'min_data_in_leaf': 200,
+    'min_data_in_leaf': 150,
     'learning_rate': 0.02,
     'feature_fraction': 0.8,
     'bagging_fraction': 0.8,
@@ -84,4 +86,3 @@ submission = pd.concat([test_id, score], axis=1)
 sample = pd.read_csv('data/sample_submission.csv')
 submission = sample[['test_id']].merge(submission, how='left', on=['test_id']).fillna(0)
 submission.to_csv('artifacts/submission.csv', index=False)
-#%%

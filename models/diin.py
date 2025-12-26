@@ -232,5 +232,3 @@ class DIIN(nn.Module):
         attn = torch.softmax(scores, dim=-1)
         out = attn @ x
         return out
-
-#%%

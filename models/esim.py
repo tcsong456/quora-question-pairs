@@ -143,5 +143,3 @@ class ESIM(nn.Module):
         out = attn @ x2
         out = out * x1_mask.bool().unsqueeze(-1)
         return out
-
-#%%
