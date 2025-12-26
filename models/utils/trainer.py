@@ -57,7 +57,6 @@ class Trainer:
         self.epochs = epochs
         self.vocab = vocab
         self.suffix = ''
-        self.collate_fn = None
         
         self.data_train, self.data_val = [], []
         self.models, self.optimizers = [], []
@@ -208,24 +207,23 @@ class Trainer:
         loss_meter_val = AverageMeter()
         
         train_dataset = self.dataset(bv=self.vocab,
-                                   q_idx=train_idx,
-                                   mode='train')
+                                    q_idx=train_idx,
+                                    mode='train')
         val_dataset = self.dataset(bv=self.vocab,
                                  q_idx=val_idx,
                                  mode='val')
+            
         train_dataloader = DataLoader(
             train_dataset,
             shuffle=True,
             batch_size=self.batch_size,
-            collate_fn=self.collate_fn
           )
         val_dataloader = DataLoader(
             val_dataset,
             shuffle=False,
             batch_size=self.test_batch_size,
-            collate_fn=self.collate_fn
           )
-        
+
         os.makedirs('artifacts/training', exist_ok=True)
         if self.model_name in ['sbert', 'deberta', 'transformer_diin']:
             total_steps = 2 * int(self.train_data.shape[0] * 0.8 // self.batch_size + 1)
@@ -260,7 +258,8 @@ class Trainer:
                 if self.model_name in ['sbert', 'deberta', 'transformer_diin']:
                     scheduler.step()
                 
-                loss_meter_tr.update(loss.item(), 1)
+                bs = y_true.numel()
+                loss_meter_tr.update(loss.item(), bs)
                 loss = loss_meter_tr.average
                 train_dl.set_postfix({
                     f'epoch {epoch} loss': f'{loss:.5f}',
@@ -283,10 +282,11 @@ class Trainer:
                     with autocast(enabled=self.amp):
                         yp, feature = model(batch, return_embedding=True)
                         val_loss = self.loss_fn(yp.view(-1), yt.float())
-                        features.append(feature)
+                        features.append(feature.detach().cpu())
                     id = batch[0].cpu().numpy()
                     ids.append(id)
-                    loss_meter_val.update(val_loss, 1)
+                    bs = yt.numel()
+                    loss_meter_val.update(val_loss.item(), bs)
                     val_loss = loss_meter_val.average
                     val_dl.set_postfix({
                         f'epoch {epoch} loss': f'{val_loss: .5f}'

@@ -9,7 +9,7 @@ class QQPDataset(Dataset):
         assert mode in ['train', 'val', 'test']
         sent_idx = bv.load_arrays()
         self.sent_idx = sent_idx
-        data = bv.train_data.values if mode != 'test' else bv.test_data.values
+        data = bv.train_data if mode != 'test' else bv.test_data
         self.q_idx = q_idx
         self.data = data
         self.mode = mode
@@ -39,14 +39,15 @@ class QQPDataset(Dataset):
         q2_len = q2_lens[idx]
         q1_char = q1_chars[idx]
         q2_char = q2_chars[idx]
-        row = self.data[idx]
-        id = row[0]
+        row = self.data.iloc[idx]
         if self.mode != 'test':
-            y = row[-1]
+            y = row['is_duplicate']
+            id = row['id']
             return id, q1, q2, q1_len, q2_len, q1_char, q2_char, y
         else:
+            id = row['test_id']
             return id, q1, q2, q1_len, q2_len, q1_char, q2_char
-          
+
 class SBERTDataset(Dataset):
     def __init__(self,
                  bv,

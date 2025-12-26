@@ -3,6 +3,7 @@ import torch
 import numpy as np
 from torch import nn
 from torch.nn import functional as F
+from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
 class TinyEncoder(nn.Module):
     def __init__(self, d_model=256, nhead=8, dim_ff=1024, dropout=0.1, layers=2):
@@ -48,7 +49,7 @@ class TransformerDIIN(nn.Module):
                 d_model=192,
                 nhead=6,
                 dim_ff=768,
-                layers=3,
+                layers=1,
                 dropout=0.1
             )
         self.conv = nn.Sequential(
@@ -59,9 +60,24 @@ class TransformerDIIN(nn.Module):
             nn.GELU()
             )
         self.final_layer = nn.Linear(64, 1)
+        
         self.max_len = max_len
         self.device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
+        self.init_weights()
     
+    def init_weights(self):
+        nn.init.xavier_uniform_(self.proj.weight)
+        nn.init.zeros_(self.proj.bias)
+    
+        for m in self.conv.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, nonlinearity="relu")
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+    
+        nn.init.xavier_uniform_(self.final_layer.weight, gain=0.1)
+        nn.init.zeros_(self.final_layer.bias)
+        
     def masked_softmax(self, logits, mask, dim):
         logits = logits.masked_fill(~mask, -1e4)
         return torch.softmax(logits, dim=dim)
@@ -84,7 +100,7 @@ class TransformerDIIN(nn.Module):
         q1a = F.normalize(q1_att, dim=-1)
         q2a = F.normalize(q2_att, dim=-1)
     
-        S_enc = torch.matmul(q1e, q2e.transpose(1, 2)) 
+        S_enc = torch.matmul(q1e, q2e.transpose(1, 2))
 
         S_att = torch.matmul(q1a, q2e.transpose(1, 2))
 
@@ -105,11 +121,28 @@ class TransformerDIIN(nn.Module):
         q_mask = ref_len[None] < q_len[:, None]
         return q_mask
     
+    def _handle_lstm(self, x, x_len, lstm_func, dropout_func):
+        x = pack_padded_sequence(x, x_len.cpu(), batch_first=True, enforce_sorted=False)
+        x_packed_output, _ = lstm_func(x)
+        x_output, _ = pad_packed_sequence(x_packed_output, batch_first=True, total_length=self.max_len)
+        x_output = dropout_func(x_output)
+        return x_output
+    
+    def token_metrics(self, q, q_att):
+        abs_diff = torch.abs(q - q_att)
+        xn = F.normalize(q, p=2, dim=-1, eps=1e-7)
+        tn = F.normalize(q_att, p=2, dim=-1, eps=1e-7)
+        cos = (xn * tn).sum(dim=-1, keepdim=True)
+        l2 = torch.sqrt(((q - q_att)**2).sum(axis=-1, keepdim=True) + 1e-7)
+        feats = torch.cat([q, q_att, abs_diff, cos, l2], dim=-1)
+        return feats
+
     def forward(self, batch, return_embedding=False):
         q1 = batch[1]
         q2 = batch[2]
         q1_len = batch[3]
         q2_len = batch[4]
+        
         q1_mask = self.mask(q1_len)
         q2_mask = self.mask(q2_len)
         q1_emb = self.proj(self.words_embedding(q1))
@@ -128,51 +161,12 @@ class TransformerDIIN(nn.Module):
         feat = self.conv(x)
         f_max = feat.amax(dim=(2,3))
         f_mean = feat.mean(dim=(2,3))
-        final = torch.cat([f_max, f_mean], dim=-1)
-        logit = self.final_layer(final)
+        cnn_feat = torch.cat([f_max, f_mean], dim=-1)
+        
+        logit = self.final_layer(F.relu(cnn_feat))
         if return_embedding:
             preds = F.sigmoid(logit)
-            output = torch.cat([preds, final], dim=-1)
+            output = torch.cat([preds, cnn_feat], dim=-1)
             return logit, output
         else:
             return logit
-            
-
-#%%
-# import numpy as np
-# from torch.utils.data import DataLoader
-# from models.utils.dataset import QQPDataset
-# from models.utils.build_vocab import BuildVocab
-# from gensim.models.fasttext import load_facebook_model
-# vec_model = load_facebook_model('artifacts/cc.en.300.bin')
-# bv = BuildVocab('data/train.csv',
-#                 'data/test.csv')
-# words_index_dict = bv.load_dict()
-
-# dataset = QQPDataset(
-#         bv=bv,
-#         q_idx=np.arange(bv.train_data.shape[0]),
-#         mode='train'
-#     )
-# dl = DataLoader(
-#         dataset,
-#         batch_size=128,
-#         shuffle=True
-#     )
-# for batch in dl:
-#     break
-
-#%%
-# model = TransformerDIIN(
-#         emb_dim=300,
-#         words_index_dict=words_index_dict,
-#         max_len=40,
-#         vec_model=vec_model
-#     ).cuda()
-# for i, v in enumerate(batch):
-#     if isinstance(v, torch.Tensor):
-#         batch[i] = v.cuda()
-# a = model(batch)
-
-#%%
-
