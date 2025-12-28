@@ -138,7 +138,6 @@ def mine_hard_negatives_ultrafast(
     qid_dict,
     comp_dict,
     sbert_encoder,
-    tfidf_min_df=2,
     tfidf_neighbors=120, 
     shortlist=60, 
     final_k=3,
@@ -274,6 +273,7 @@ if __name__ == '__main__':
             comp_map,
             sbert,
             tfidf_batch=128,
+            final_k=8
         )
 
     with open('artifacts/q1_neg_sample.pkl', 'wb') as f:
@@ -281,6 +281,4 @@ if __name__ == '__main__':
 
     with open('artifacts/q2_neg_sample.pkl', 'wb') as f:
         pickle.dump(q2_neg, f)
-
-#%%
 
