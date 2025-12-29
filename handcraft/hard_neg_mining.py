@@ -1,10 +1,10 @@
 import re
+import torch
 import pickle
 import numpy as np
-import torch
+from tqdm import tqdm
 import torch.nn.functional as F
 from transformers import AutoTokenizer, AutoModel
-from tqdm import tqdm
 from models.utils.build_vocab import BuildVocab
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.preprocessing import normalize as sk_normalize
@@ -170,7 +170,7 @@ def mine_hard_negatives_ultrafast(
     E_cand_union = sbert_encoder.encode([cand_texts[i] for i in union_ids],
                                         batch_size=sbert_bs, max_length=max_length)
 
-    E_anchor = E_anchor.astype(np.float32)  # queries small; keep fp32
+    E_anchor = E_anchor.astype(np.float32)
     if store_float16:
         E_cand_union = E_cand_union.astype(np.float16)
 
@@ -275,10 +275,19 @@ if __name__ == '__main__':
             tfidf_batch=128,
             final_k=8
         )
+    
+    q1_neg_dict = {}
+    q2_neg_dict = {}
+    for i in range(pos_pairs.shape[0]):
+        q1_key = pos_pairs[i][0].strip()
+        q2_key = pos_pairs[i][1].strip()
+        q1_neg_samples = q1_neg[i]
+        q2_neg_samples = q2_neg[i]
+        q1_neg_dict[q1_key] = q1_neg_samples
+        q2_neg_dict[q2_key] = q2_neg_samples
 
     with open('artifacts/q1_neg_sample.pkl', 'wb') as f:
-        pickle.dump(q1_neg, f)
+        pickle.dump(q1_neg_dict, f)
 
     with open('artifacts/q2_neg_sample.pkl', 'wb') as f:
-        pickle.dump(q2_neg, f)
-
+        pickle.dump(q2_neg_dict, f)
