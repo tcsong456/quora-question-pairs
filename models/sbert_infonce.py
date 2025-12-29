@@ -1,7 +1,9 @@
 import warnings
 warnings.filterwarnings('ignore')
+import os
 import pickle
 import torch
+import numpy as np
 from torch import nn
 from tqdm import tqdm
 from torch import optim
@@ -12,71 +14,9 @@ from torch.utils.data import Dataset, DataLoader
 from transformers import AutoTokenizer, AutoModel
 from sklearn.model_selection import StratifiedKFold
 
-# class InfoNceDataset(Dataset):
-#     def __init__(self,
-#                  data):
-#         self.data = data
-#         self.tokenizer = AutoTokenizer.from_pretrained("sentence-transformers/all-mpnet-base-v2")
-#         self.max_len = 40
-        
-#         with open('artifacts/q1_neg_sample.pkl', 'rb') as f:
-#             self.q1_neg_dict = pickle.load(f)
-        
-#         with open('artifacts/q2_neg_sample.pkl', 'rb') as f:
-#             self.q2_neg_dict = pickle.load(f)
-    
-#     def __len__(self):
-#         return self.data.shape[0]
-    
-#     def __getitem__(self, index):
-#         row = self.data.iloc[index]
-#         q1 = row['question1'].strip()
-#         q2 = row['question2'].strip()
-#         q1_hard_neg = self.q1_neg_dict[q1]
-#         q2_hard_neg = self.q2_neg_dict[q2]
-        
-#         enc1 = self.tokenizer(
-#                 q1,
-#                 padding="max_length",
-#                 truncation=True,
-#                 max_length=self.max_len,
-#                 return_tensors='pt'
-#             )
-#         enc2 = self.tokenizer(
-#                 q2,
-#                 padding="max_length",
-#                 truncation=True,
-#                 max_length=self.max_len,
-#                 return_tensors='pt'
-#             )
-#         enc_neg1 = self.tokenizer(
-#                 q1_hard_neg,
-#                 padding="max_length",
-#                 truncation=True,
-#                 max_length=self.max_len,
-#                 return_tensors='pt'
-#             )
-#         enc_neg2 = self.tokenizer(
-#                 q2_hard_neg,
-#                 padding="max_length",
-#                 truncation=True,
-#                 max_length=self.max_len,
-#                 return_tensors='pt'
-#             )
-
-#         return {
-#             "q1_ids": enc1["input_ids"].squeeze(0),          
-#             "q1_mask": enc1["attention_mask"].squeeze(0),    
-#             "q2_ids": enc2["input_ids"].squeeze(0),          
-#             "q2_mask": enc2["attention_mask"].squeeze(0),    
-#             "q1n_ids": enc_neg1["input_ids"],                
-#             "q1n_mask": enc_neg1["attention_mask"],          
-#             "q2n_ids": enc_neg2["input_ids"],                
-#             "q2n_mask": enc_neg2["attention_mask"],          
-#         }
-
 class InfoNceDataset(Dataset):
-    def __init__(self, df):
+    def __init__(self,
+                 df):
         self.q1 = df["question1"].astype(str).tolist()
         self.q2 = df["question2"].astype(str).tolist()
         with open('artifacts/q1_neg_sample.pkl', 'rb') as f:
@@ -97,13 +37,13 @@ class InfoNceDataset(Dataset):
         return q1, q2, q1n, q2n
 
 class InfoNceCollator:
-    def __init__(self):
-        self.tok = AutoTokenizer.from_pretrained("sentence-transformers/all-mpnet-base-v2")
+    def __init__(self, tokenizer):
+        self.tok = tokenizer
         self.max_len = 40
         self.K = 3
 
     def __call__(self, batch):
-        q1, q2, q1n, q2n = zip(*batch)  # tuples of strings
+        q1, q2, q1n, q2n = zip(*batch)
         q1 = [t.strip() for t in q1]
         q2 = [t.strip() for t in q2]
         B, K = len(q1), self.K
@@ -136,6 +76,46 @@ class InfoNceCollator:
             "q1n_ids": q1n_ids, "q1n_mask": q1n_mask,
             "q2n_ids": q2n_ids, "q2n_mask": q2n_mask,
         }
+
+class InfoNceDatasetV1(Dataset):
+    def __init__(self,
+                 data,
+                 mode='train'):
+        self.id = data['id'].values if mode != 'test' else data['test_id'].values
+        self.q1 = data['question1'].astype(str).tolist()
+        self.q2 = data['question2'].astype(str).tolist()
+        self.data = data
+    
+    def __len__(self):
+        return self.data.shape[0]
+    
+    def __getitem__(self, i):
+        q1 = self.q1[i]
+        q2 = self.q2[i]
+        id = self.id[i]
+        return id, q1, q2
+
+class InfoNceCollatorV1:
+    def __init__(self, tokenizer):
+        self.max_len = 40
+        self.tok = tokenizer
+    
+    def __call__(self, batch):
+        id, q1, q2 = zip(*batch)
+        q1 = [t.strip() for t in q1]
+        q2 = [t.strip() for t in q2]
+        
+        enc1  = self.tok(q1,       padding="max_length", truncation=True,
+                         max_length=self.max_len, return_tensors="pt")
+        enc2  = self.tok(q2,       padding="max_length", truncation=True,
+                         max_length=self.max_len, return_tensors="pt")
+        id = torch.as_tensor(id)
+        
+        return {
+            "id": id,
+            "q1_ids": enc1["input_ids"], "q1_mask": enc1["attention_mask"],
+            "q2_ids": enc2["input_ids"], "q2_mask": enc2["attention_mask"],
+            }
 
 def infoNCE_with_hard_negatives(
             q1, q2,
@@ -173,6 +153,26 @@ class SBERTEncoder(nn.Module):
         emb = F.normalize(emb, p=2, dim=-1)
         return emb
 
+def pair_features(u, v, eps=1e-9):
+    cos = np.sum(u * v, axis=1, keepdims=True)
+    diff = u - v
+    absdiff = abs(diff)
+    prod = u * v
+    
+    l2 = np.sqrt(np.sum(diff**2, axis=1, keepdims=True) + eps)
+    l1 = np.sum(absdiff, axis=1, keepdims=True)
+    
+    feats = np.concatenate([
+        cos, l2, l1,
+        absdiff.mean(1, keepdims=True),
+        absdiff.max(1, keepdims=True),
+        absdiff.std(1, keepdims=True),
+        prod.mean(1, keepdims=True),
+        prod.max(1, keepdims=True),
+        prod.std(1, keepdims=True),
+    ], axis=1)
+    return feats
+
 class AverageMeter:
     def __init__(self):
         self.reset()
@@ -192,6 +192,7 @@ class Trainer:
                  bv):
         train = bv.train_data
         test = bv.test_data
+        self.test = test
         
         device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
         self.data_train, self.data_pos_val, self.data_val = [], [], []
@@ -236,33 +237,44 @@ class Trainer:
                 )
             self.optimizers.append(optimizer)
             self.models.append(model)
-            self.dataset = InfoNceDataset
         self.device = device
     
     def train(self):
+        tokenizer = AutoTokenizer.from_pretrained("sentence-transformers/all-mpnet-base-v2")
+        self.tokenizer = tokenizer
         for fold in range(5):
+            best_loss = np.inf
             model = self.models[fold]
             optimizer = self.optimizers[fold]
-            ds_train = self.dataset(self.data_train[fold])
-            ds_val = self.dataset(self.data_pos_val[fold])
-            collate = InfoNceCollator()
+            ds_train = InfoNceDataset(self.data_train[fold])
+            ds_pos_val = InfoNceDataset(self.data_pos_val[fold])
+            ds_val = InfoNceDatasetV1(self.data_val[fold])
+            collate = InfoNceCollator(tokenizer=tokenizer)
+            collatev1 = InfoNceCollatorV1(tokenizer=tokenizer)
             dl_train = DataLoader(
                     ds_train,
                     batch_size=64,
                     shuffle=True,
                     collate_fn=collate
                 )
-            dl_val = DataLoader(
-                    ds_val,
+            dl_pos_val = DataLoader(
+                    ds_pos_val,
                     batch_size=128,
                     shuffle=False,
                     collate_fn=collate
                 )
+            dl_val = DataLoader(
+                    ds_val,
+                    batch_size=128,
+                    shuffle=False,
+                    collate_fn=collatev1
+                )
+            
             loss_meter_tr = AverageMeter()
             loss_meter_val = AverageMeter()
             scaler = GradScaler(enabled=True)
             
-            for epoch in range(20):
+            for epoch in range(1):
                 model.train()
                 train_dl = tqdm(dl_train, total=len(dl_train),
                                 desc='training sbert on infonce loss')
@@ -301,9 +313,9 @@ class Trainer:
                 
                 with torch.no_grad():
                     model.eval()
-                    val_dl = tqdm(dl_val, total=len(dl_val),
+                    val_pos_dl = tqdm(dl_pos_val, total=len(dl_pos_val),
                                   desc='evaluating sbert on infonce loss')
-                    for batch in val_dl:
+                    for batch in val_pos_dl:
                         for k, v in batch.items():
                             if isinstance(v, torch.Tensor):
                                 batch[k] = v.to(self.device)
@@ -324,9 +336,113 @@ class Trainer:
                         
                         loss_meter_val.update(val_loss.item(), 128)
                         val_loss = loss_meter_val.average
-                        val_dl.set_postfix({
+                        val_pos_dl.set_postfix({
                             f'epoch {epoch} loss': f'{val_loss: .5f}'
                           })
+                    
+                feats, ids = [], []
+                val_dl = tqdm(dl_val, total=len(dl_val),
+                              desc=f'generating features for val fold {fold}')
+                for batch in val_dl:
+                    for k, v in batch.items():
+                        if isinstance(v, torch.Tensor):
+                            batch[k] = v.to(self.device)
+                    
+                    with autocast(enabled=True):
+                        id = batch['id'].cpu().numpy()
+                        q1 = model(batch['q1_ids'], batch['q1_mask'])
+                        q2 = model(batch['q2_ids'], batch['q2_mask'])
+                        q1 = q1.detach().cpu().numpy()
+                        q2 = q2.detach().cpu().numpy()
+                        features = pair_features(q1, q2)
+                        ids.append(id), feats.append(features)
+                    
+                if val_loss < best_loss:
+                    best_loss = val_loss
+                    bad_epoch = 0
+                    torch.save({
+                        'model': model.state_dict(),
+                      }, f'checkpoints/sbert_infonce_{fold}.pth')
+                    ids = np.concatenate(ids)
+                    pair_feats = np.concatenate(feats, axis=0)
+                    infonce_pair_features = np.concatenate([ids[:, None], pair_feats], axis=1)
+                    np.save(f'artifacts/training/infonce_pair_features_{fold}.npy', infonce_pair_features.astype(np.float32))
+                else:
+                    bad_epoch += 1
+                
+                if bad_epoch == 1:
+                    print(f'early stopping reaches at epoch: {epoch}')
+                    break
+    
+    @torch.no_grad()
+    def predict(self):
+        tokenizer = AutoTokenizer.from_pretrained("sentence-transformers/all-mpnet-base-v2")
+        self.tokenizer = tokenizer
+        for fold in range(5):
+            model = self.models[fold]
+            checkpoint = f'checkpoints/sbert_infonce_{fold}.pth'
+            ckpt = torch.load(checkpoint)
+            model.load_state_dict(ckpt['model'])
+            collate_fn = InfoNceCollatorV1(self.tokenizer)
+            
+            ds_test = InfoNceDatasetV1(
+                    self.test,
+                    mode='test'
+                )
+            dl_test = DataLoader(
+                    ds_test,
+                    batch_size=512,
+                    shuffle=False,
+                    collate_fn=collate_fn
+                )
+            test_dl = tqdm(dl_test, total=len(dl_test),
+                           desc='generating pair features for test set')
+            
+            ids, feats = [], []
+            for batch in test_dl:
+                for k, v in batch.items():
+                    if isinstance(v, torch.Tensor):
+                        batch[k] = v.to(self.device)
+                
+                id = batch['id'].cpu().numpy()
+                q1 = model(batch['q1_ids'], batch['q1_mask'])
+                q2 = model(batch['q2_ids'], batch['q2_mask'])
+                q1 = q1.detach().cpu().numpy()
+                q2 = q2.detach().cpu().numpy()
+                features = pair_features(q1, q2)
+                ids.append(id), feats.append(features)
+            
+            ids = np.concatenate(ids)
+            pair_feats = np.concatenate(feats, axis=0)
+            infonce_pair_features = np.concatenate([ids[:, None], pair_feats], axis=1)
+            np.save(f'artifacts/prediction/infonce_pair_features_{fold}.npy', infonce_pair_features.astype(np.float32))
+    
+    def merge(self):
+        print('merging scattered features')
+        train_feats = []
+        for fold in range(5):
+            prediction_path = f'artifacts/prediction/infonce_pair_features_{fold}.npy'
+            train_path = f'artifacts/training/infonce_pair_features_{fold}.npy'
+            test_features = np.load(prediction_path)
+            train_features = np.load(train_path)
+            if fold == 0:
+                total_features = np.zeros([*test_features.shape], dtype=np.float32)
+            total_features += test_features
+            train_feats.append(train_features.astype(np.float32))
+            os.remove(prediction_path)
+            os.remove(train_path)
+            
+        total_features /= 5
+        train_features = np.concatenate(train_feats, axis=0)
+        sorted_index = train_features[:, 0].argsort()
+        train_features = train_features[sorted_index]
+        sorted_index = total_features[:, 0].argsort()
+        test_features = total_features[sorted_index]
+        
+        np.save('artifacts/training/infonce_pair_features.npy', train_features)
+        np.save('artifacts/prediction/infonce_pair_features.npy', total_features)
+                
+                
 
 if __name__ == '__main__':
     bv = BuildVocab(
@@ -335,41 +451,5 @@ if __name__ == '__main__':
           )
     trainer = Trainer(bv)
     trainer.train()
-
-#%%
-# import numpy as np
-# from torch.utils.data import DataLoader
-
-
-# train = bv.train_data
-# pos_data = train[train['is_duplicate']==1]
-# collate = InfoNceCollator()
-# ds = InfoNceDataset(
-#         pos_data
-#     )
-
-# dl = DataLoader(ds, batch_size=128, shuffle=True)
-# model = SBERTEncoder("sentence-transformers/all-mpnet-base-v2").to('cuda:0')
-# for batch in dl:
-#     for k, v in batch.items():
-#         if isinstance(v, torch.Tensor):
-#             batch[k] = v.to('cuda:0')
-#     B, K, L = batch["q2n_ids"].shape
-#     q1 = model(batch['q1_ids'], batch['q1_mask'])
-#     q2 = model(batch['q2_ids'], batch['q2_mask'])
-#     q1n = model(
-#         batch["q1n_ids"].view(B*K, L),
-#         batch["q1n_mask"].view(B*K, L),
-#     ).view(B, K, -1)  # (B,K,H)
-    
-#     q2n = model(
-#         batch["q2n_ids"].view(B*K, L),
-#         batch["q2n_mask"].view(B*K, L),
-#     ).view(B, K, -1)
-    
-#     loss = infoNCE_with_hard_negatives(q1, q2, q1n, q2n, temperature=0.05)
-#     break
-
-#%%
-# trainer = Trainer(bv=bv)
-# trainer.data_val
+    trainer.predict()
+    trainer.merge()
