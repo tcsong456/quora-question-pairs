@@ -441,8 +441,6 @@ class Trainer:
         
         np.save('artifacts/training/infonce_pair_features.npy', train_features)
         np.save('artifacts/prediction/infonce_pair_features.npy', total_features)
-                
-                
 
 if __name__ == '__main__':
     bv = BuildVocab(
