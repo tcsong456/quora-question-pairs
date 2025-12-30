@@ -173,6 +173,23 @@ def pair_features(u, v, eps=1e-9):
     ], axis=1)
     return feats
 
+def info_retrieval_metrics(u, v, n, temperature=0.05):
+    B, D = u.shape
+    candidates = torch.cat([v.unsqueeze(1), n], dim=1)
+    logits = torch.einsum('bd, bkd->bk', u, candidates) / temperature
+    pos = logits[:, 0]
+    neg_max = logits[:, 1:].max(dim=1).values
+    margin = (pos - neg_max).mean()
+    win_rate = (pos > neg_max).float().mean()
+    pos_rank = (logits > pos[:, None]).sum(dim=1)
+    
+    metrics = {
+        "margin": margin,
+        "win_rate": win_rate
+    }
+    metrics["top1"] = (pos_rank < 1).float().mean()
+    return metrics
+
 class AverageMeter:
     def __init__(self):
         self.reset()
@@ -236,13 +253,13 @@ class Trainer:
                 ]
                 )
             self.optimizers.append(optimizer)
-            self.models.append(model)
         self.device = device
     
     def train(self):
         tokenizer = AutoTokenizer.from_pretrained("sentence-transformers/all-mpnet-base-v2")
         self.tokenizer = tokenizer
-        for fold in range(5):
+        for fold in range(1, 5):
+            best_top1_hit_rate = 0
             best_loss = np.inf
             model = self.models[fold]
             optimizer = self.optimizers[fold]
@@ -253,31 +270,32 @@ class Trainer:
             collatev1 = InfoNceCollatorV1(tokenizer=tokenizer)
             dl_train = DataLoader(
                     ds_train,
-                    batch_size=64,
+                    batch_size=32,
                     shuffle=True,
                     collate_fn=collate
                 )
             dl_pos_val = DataLoader(
                     ds_pos_val,
-                    batch_size=128,
+                    batch_size=256,
                     shuffle=False,
                     collate_fn=collate
                 )
             dl_val = DataLoader(
                     ds_val,
-                    batch_size=128,
+                    batch_size=256,
                     shuffle=False,
                     collate_fn=collatev1
                 )
-            
-            loss_meter_tr = AverageMeter()
-            loss_meter_val = AverageMeter()
             scaler = GradScaler(enabled=True)
             
-            for epoch in range(1):
+            for epoch in range(10):
+                loss_meter_tr = AverageMeter()
+                loss_meter_val = AverageMeter()
+                top1_meter_val = AverageMeter()
+                
                 model.train()
                 train_dl = tqdm(dl_train, total=len(dl_train),
-                                desc='training sbert on infonce loss')
+                                desc=f'training sbert on infonce loss on fold{fold} epoch{epoch}')
                 for batch in train_dl:
                     for k, v in batch.items():
                         if isinstance(v, torch.Tensor):
@@ -304,7 +322,7 @@ class Trainer:
                     scaler.step(optimizer)
                     scaler.update()
                     
-                    loss_meter_tr.update(loss.item(), 64)
+                    loss_meter_tr.update(loss.item(), 32)
                     loss = loss_meter_tr.average
                     train_dl.set_postfix({
                         f'epoch {epoch} loss': f'{loss:.5f}'
@@ -313,8 +331,9 @@ class Trainer:
                 
                 with torch.no_grad():
                     model.eval()
+                    metrics = {}
                     val_pos_dl = tqdm(dl_pos_val, total=len(dl_pos_val),
-                                  desc='evaluating sbert on infonce loss')
+                                  desc=f'evaluating sbert on infonce loss on fold{fold} epoch{epoch}')
                     for batch in val_pos_dl:
                         for k, v in batch.items():
                             if isinstance(v, torch.Tensor):
@@ -332,12 +351,25 @@ class Trainer:
                                 batch["q2n_ids"].view(B*K, L),
                                 batch["q2n_mask"].view(B*K, L),
                             ).view(B, K, -1)
+                            
                             val_loss = infoNCE_with_hard_negatives(q1, q2, q1n, q2n, temperature=0.08)
+                            metrics_u2v = info_retrieval_metrics(q1, q2, q2n, temperature=0.08)
+                            metrics_v2u = info_retrieval_metrics(q2, q1, q1n, temperature=0.08)
+                            for (k1, v1), (k2, v2) in zip(metrics_u2v.items(), metrics_v2u.items()):
+                                if k1 != k2:
+                                    raise ValueError(f'metric1 has key: {k1} whicle metric2 has key: {k2}')
+                                v = (v1 + v2) / 2
+                                metrics[k1] = v
+                                
+                            top1_hit = metrics['top1']
                         
-                        loss_meter_val.update(val_loss.item(), 128)
+                        loss_meter_val.update(val_loss, B)
+                        top1_meter_val.update(top1_hit, B)
                         val_loss = loss_meter_val.average
+                        top1_hit = top1_meter_val.average
                         val_pos_dl.set_postfix({
-                            f'epoch {epoch} loss': f'{val_loss: .5f}'
+                            f'epoch {epoch} loss': f'{val_loss: .5f}',
+                            f'epoch {epoch} top1-hit': f'{top1_hit: .4f}',
                           })
                     
                 feats, ids = [], []
@@ -357,11 +389,14 @@ class Trainer:
                         features = pair_features(q1, q2)
                         ids.append(id), feats.append(features)
                     
-                if val_loss < best_loss:
+                if top1_hit > best_top1_hit_rate and val_loss < best_loss:
+                    best_top1_hit_rate = top1_hit
                     best_loss = val_loss
                     bad_epoch = 0
                     torch.save({
                         'model': model.state_dict(),
+                        'infonce_loss': val_loss,
+                        'top1-hit': top1_hit
                       }, f'checkpoints/sbert_infonce_{fold}.pth')
                     ids = np.concatenate(ids)
                     pair_feats = np.concatenate(feats, axis=0)
@@ -380,6 +415,7 @@ class Trainer:
         self.tokenizer = tokenizer
         for fold in range(5):
             model = self.models[fold]
+            model.eval()
             checkpoint = f'checkpoints/sbert_infonce_{fold}.pth'
             ckpt = torch.load(checkpoint)
             model.load_state_dict(ckpt['model'])
@@ -391,12 +427,12 @@ class Trainer:
                 )
             dl_test = DataLoader(
                     ds_test,
-                    batch_size=512,
+                    batch_size=256,
                     shuffle=False,
                     collate_fn=collate_fn
                 )
             test_dl = tqdm(dl_test, total=len(dl_test),
-                           desc='generating pair features for test set')
+                           desc=f'generating pair features for test set on fold {fold}')
             
             ids, feats = [], []
             for batch in test_dl:
