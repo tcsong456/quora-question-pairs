@@ -56,7 +56,7 @@ if __name__ == '__main__':
     all_q = [space_re.sub(' ', q.lower().strip()) for q in all_q]
     
     vec = TfidfVectorizer(
-        ngram_range=(1,1),
+        ngram_range=(1,2),
         min_df=3, max_df=0.95,
         max_features=150000,
         norm='l2'
