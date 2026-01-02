@@ -57,7 +57,3 @@ class SBERT(nn.Module):
             return logits
 
 
-
-#%%
-
-

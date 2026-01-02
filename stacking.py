@@ -8,8 +8,9 @@ def build_data(mode='train'):
     assert mode in ['train', 'test']
     location = 'training' if mode == 'train' else 'prediction'
     dfs = []
-    ft_name = ['bimpm_features_multi_head', 'diin_features', 'esim_features', 'sbert_features', 'deberta_features', 'transformer_diin_features',
-               'lda_features', 'single_pair_tfidf', 'double_pair_tfidf', 'graph_local', 'basic_feats', 'neighbor_avg_degree',
+    ft_name = ['bimpm_features_multi_head', 'diin_features', 'esim_features', 'sbert_features', 'deberta_features', 
+               'transformer_diin_features', 'btm_features', 'lsa_features',
+               'nmf_features', 'tfidf_features', 'graph_local', 'basic_feats', 'neighbor_avg_degree',
                'kcore', 'katz', 'triangle_clustring', 'components', '2_hop_neigh', 'n2v']
     for f in ft_name:
         model = f.split('_')[0]
@@ -43,46 +44,47 @@ params = {
     'num_threads': 16
 }
 
-X_meta_tr, y = build_data('train')
-test_id, X_meta_te = build_data('test')
-val_losses = []
-predictions = []
-skf = StratifiedKFold(n_splits=5, random_state=7610, shuffle=True)
-for train_idx, val_idx in skf.split(X_meta_tr, y):
-    X_tr, y_tr = X_meta_tr[train_idx], y[train_idx]
-    X_val, y_val = X_meta_tr[val_idx], y[val_idx]
+if __name__ == '__main__':
+    X_meta_tr, y = build_data('train')
+    test_id, X_meta_te = build_data('test')
+    val_losses = []
+    predictions = []
+    skf = StratifiedKFold(n_splits=5, random_state=7610, shuffle=True)
+    for train_idx, val_idx in skf.split(X_meta_tr, y):
+        X_tr, y_tr = X_meta_tr[train_idx], y[train_idx]
+        X_val, y_val = X_meta_tr[val_idx], y[val_idx]
+        
+        dtrain = lgb.Dataset(X_tr, label=y_tr)
+        dvalid = lgb.Dataset(X_val, label=y_val, reference=dtrain)
     
-    dtrain = lgb.Dataset(X_tr, label=y_tr)
-    dvalid = lgb.Dataset(X_val, label=y_val, reference=dtrain)
-
-    model_meta = lgb.train(
-        params,
-        dtrain,
-        num_boost_round=2000,
-        valid_sets=[dtrain, dvalid],
-        valid_names=["train", "valid"],
-        callbacks=[
-            lgb.early_stopping(stopping_rounds=50),
-            lgb.log_evaluation(period=50)
-        ],
-    )
+        model_meta = lgb.train(
+            params,
+            dtrain,
+            num_boost_round=2000,
+            valid_sets=[dtrain, dvalid],
+            valid_names=["train", "valid"],
+            callbacks=[
+                lgb.early_stopping(stopping_rounds=50),
+                lgb.log_evaluation(period=50)
+            ],
+        )
+        
+        p_val = model_meta.predict(X_val, num_iteration=model_meta.best_iteration)
+        val_loss = log_loss(y_val, p_val)
+        val_losses.append(val_loss)
+        p_test = model_meta.predict(X_meta_te, num_iteration=model_meta.best_iteration)
+        predictions.append(p_test)
+    val_loss = np.mean(val_losses)
+    print(f'average validation loss: {val_loss: .5f}')
     
-    p_val = model_meta.predict(X_val, num_iteration=model_meta.best_iteration)
-    val_loss = log_loss(y_val, p_val)
-    val_losses.append(val_loss)
-    p_test = model_meta.predict(X_meta_te, num_iteration=model_meta.best_iteration)
-    predictions.append(p_test)
-val_loss = np.mean(val_losses)
-print(f'average validation loss: {val_loss: .5f}')
-
-test_id = pd.DataFrame(test_id).rename(columns={'id': 'test_id'}).astype(np.int32)
-score = np.zeros([X_meta_te.shape[0]], dtype=np.float32)
-for p in predictions:
-    score += p
-score /= len(predictions)
-score = pd.DataFrame(score, columns=['is_duplicate'])
-submission = pd.concat([test_id, score], axis=1)
-
-sample = pd.read_csv('data/sample_submission.csv')
-submission = sample[['test_id']].merge(submission, how='left', on=['test_id']).fillna(0)
-submission.to_csv('artifacts/submission.csv', index=False)
+    test_id = pd.DataFrame(test_id).rename(columns={'id': 'test_id'}).astype(np.int32)
+    score = np.zeros([X_meta_te.shape[0]], dtype=np.float32)
+    for p in predictions:
+        score += p
+    score /= len(predictions)
+    score = pd.DataFrame(score, columns=['is_duplicate'])
+    submission = pd.concat([test_id, score], axis=1)
+    
+    sample = pd.read_csv('data/sample_submission.csv')
+    submission = sample[['test_id']].merge(submission, how='left', on=['test_id']).fillna(0)
+    submission.to_csv('artifacts/submission.csv', index=False)
