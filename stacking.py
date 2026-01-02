@@ -4,13 +4,14 @@ import lightgbm as lgb
 from sklearn.metrics import log_loss
 from sklearn.model_selection import StratifiedKFold
 
+# lda_features
 def build_data(mode='train'):
     assert mode in ['train', 'test']
     location = 'training' if mode == 'train' else 'prediction'
     dfs = []
     ft_name = ['bimpm_features_multi_head', 'diin_features', 'esim_features', 'sbert_features', 'deberta_features', 
-               'transformer_diin_features',
-               'lda_features', 'single_pair_tfidf', 'double_pair_tfidf', 'graph_local', 'basic_feats', 'neighbor_avg_degree',
+               'transformer_diin_features', 'btm_features', 'lsa_features', 'lda_features',
+               'nmf_features', 'tfidf_features', 'graph_local', 'basic_feats', 'neighbor_avg_degree',
                'kcore', 'katz', 'triangle_clustring', 'components', '2_hop_neigh', 'n2v']
     for f in ft_name:
         model = f.split('_')[0]
