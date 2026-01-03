@@ -13,6 +13,7 @@ from models.bimpm import BiMPM
 from models.diin import DIIN
 from models.esim import ESIM
 from models.sbert import SBERT
+from models.siamese_cnn import SiameseCNN
 from models.transformer_diin import TransformerDIIN
 from models.deberta import DeBertaV3
 from models.utils.build_vocab import BuildVocab
@@ -114,6 +115,14 @@ class Trainer:
                         max_len=40,
                         vec_model=vec_model
                     ).to(device)
+            elif model_name == 'siamese_cnn':
+                model = SiameseCNN(
+                       vocab=bv,
+                       vec_model=vec_model,
+                       emb_dim=300,
+                       out_channels=256,
+                       kernel_sizes=[2, 3, 4, 5]
+                    ).to(device)
             
             if model_name == 'transformer_diin':
                 lr_enc=2e-4; lr_head=1e-3; wd=0.01
@@ -138,6 +147,26 @@ class Trainer:
             elif model_name not in ['sbert', 'deberta']:
                 optimizer = optim.Adam(model.parameters(),
                                         lr=0.002)
+                dataset = QQPDataset
+            elif model_name == 'siamese_cnn':
+                decay = []
+                no_decay = []
+                lr = 0.002; weight_decay=1e-4
+                for name, p in model.named_parameters():
+                    if not p.requires_grad:
+                        continue
+                    if name.endswith(".bias") or ("ln" in name.lower()) or ("layernorm" in name.lower()) or p.ndim == 1:
+                        no_decay.append(p)
+                    else:
+                        decay.append(p)
+                optimizer = torch.optim.AdamW(
+                    [
+                        {"params": decay, "lr": lr, "weight_decay": weight_decay},
+                        {"params": no_decay, "lr": lr, "weight_decay": 0.0},
+                    ],
+                    betas=(0.9, 0.999),
+                    eps=1e-8,
+                )
                 dataset = QQPDataset
             else:
                 encoder_lr, head_lr = 2e-5, 5e-4
@@ -411,7 +440,7 @@ if __name__ == '__main__':
     bv.build_char_vocab()
     if args.model_name in ['bimpm', 'transformer_diin']:
         vec_model = load_facebook_model('artifacts/cc.en.300.bin')
-    elif args.model_name in ['diin', 'esim']:
+    elif args.model_name in ['diin', 'esim', 'siamese_cnn']:
         glove = {}
         path = 'artifacts/glove.840B.300d.txt'
         file_size = os.path.getsize(path)

@@ -9,7 +9,7 @@ def build_data(mode='train'):
     location = 'training' if mode == 'train' else 'prediction'
     dfs = []
     ft_name = ['bimpm_features_multi_head', 'diin_features', 'esim_features', 'sbert_features', 'deberta_features', 
-               'transformer_diin_features', 'btm_features', 'lsa_features',
+               'transformer_diin_features', 'siamese_cnn_features', 'btm_features', 'lsa_features',
                'nmf_features', 'tfidf_features', 'graph_local', 'basic_feats', 'neighbor_avg_degree',
                'kcore', 'katz', 'triangle_clustring', 'components', '2_hop_neigh', 'n2v']
     for f in ft_name:
