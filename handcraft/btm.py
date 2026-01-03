@@ -133,7 +133,6 @@ def btm_gibbs_numba(w1, w2, K, V, alpha, beta, iters, seed):
             a = w1[i]
             b = w2[i]
 
-            # remove
             nz[zi] -= 1
             nzw[zi, a] -= 1
             nzw[zi, b] -= 1
@@ -208,7 +207,7 @@ def infer_theta_docs(model, docs_ids, window=0):
     N = len(docs_ids)
     K = model.K
     theta = np.zeros((N, K), dtype=np.float32)
-    
+        
     iter = tqdm(enumerate(docs_ids), total=len(docs_ids), desc='inferring theta for docs')
     for di, doc in iter:
         L = len(doc)
