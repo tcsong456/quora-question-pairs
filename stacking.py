@@ -3,15 +3,16 @@ import pandas as pd
 import lightgbm as lgb
 from sklearn.metrics import log_loss
 from sklearn.model_selection import StratifiedKFold
-
+#'alignment_features', 'emb_pairwise_features', 
 def build_data(mode='train'):
     assert mode in ['train', 'test']
     location = 'training' if mode == 'train' else 'prediction'
     dfs = []
     ft_name = ['bimpm_features_multi_head', 'diin_features', 'esim_features', 'sbert_features', 'deberta_features', 
-               'transformer_diin_features', 'btm_features', 'lsa_features',
+               'transformer_diin_features', 'siamese_cnn_features', 'btm_features', 'lsa_features',
                'nmf_features', 'tfidf_features', 'graph_local', 'basic_feats', 'neighbor_avg_degree',
-               'kcore', 'katz', 'triangle_clustring', 'components', '2_hop_neigh', 'n2v']
+               'kcore', 'katz', 'triangle_clustring', 'components', '2_hop_neigh', 'n2v'
+               ]
     for f in ft_name:
         model = f.split('_')[0]
         f = f'artifacts/{location}/{f}.npy'
@@ -31,17 +32,16 @@ def build_data(mode='train'):
         test_id = x_meta['id']
         x_meta = x_meta.drop('id', axis=1)
         return test_id, x_meta
-
+#120, 150
 params = {
     'num_leaves': 120,
     "objective": "binary",
     "metric": "binary_logloss",
     'min_data_in_leaf': 150,
     'learning_rate': 0.02,
-    'feature_fraction': 0.8,
-    'bagging_fraction': 0.8,
-    'bagging_freq': 1,
-    'num_threads': 16
+    'feature_fraction': 0.2,
+    'bagging_fraction': 0.5,
+    'bagging_freq': 1
 }
 
 if __name__ == '__main__':
