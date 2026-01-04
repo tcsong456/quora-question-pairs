@@ -40,7 +40,7 @@ class SiameseCNN(nn.Module):
             nn.Dropout(0.1),
         )
         self.emb_dropout = nn.Dropout(0.1)
-        self.linear_dropout = nn.Dropout(0.075)
+        self.linear_dropout = nn.Dropout(0.1)
         self.fc = nn.Linear(4*256, 128)
         self.ln = nn.LayerNorm(128)
         self.gelu = nn.GELU()
