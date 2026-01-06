@@ -129,22 +129,23 @@ def btm_gibbs_numba(w1, w2, K, V, alpha, beta, iters, seed):
     p = np.empty(K, dtype=np.float64)
 
     for it in range(iters):
+        for i in range(B):
             zi = z[i]
             a = w1[i]
             b = w2[i]
-
+    
             nz[zi] -= 1
             nzw[zi, a] -= 1
             nzw[zi, b] -= 1
-
+    
             for k in range(K):
                 denom = 2.0 * nz[k] + betaV
                 pa = (nzw[k, a] + beta) / denom
                 pb = (nzw[k, b] + beta) / denom
                 p[k] = (nz[k] + alpha) * pa * pb
-
+    
             newz = _sample_categorical_unnorm(rand_u01(), p)
-
+    
             z[i] = newz
             nz[newz] += 1
             nzw[newz, a] += 1

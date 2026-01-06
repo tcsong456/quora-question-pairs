@@ -3,7 +3,7 @@ import pandas as pd
 import lightgbm as lgb
 from sklearn.metrics import log_loss
 from sklearn.model_selection import StratifiedKFold
-#'alignment_features', 'emb_pairwise_features', 
+
 def build_data(mode='train'):
     assert mode in ['train', 'test']
     location = 'training' if mode == 'train' else 'prediction'
@@ -32,7 +32,7 @@ def build_data(mode='train'):
         test_id = x_meta['id']
         x_meta = x_meta.drop('id', axis=1)
         return test_id, x_meta
-#120, 150
+
 params = {
     'num_leaves': 120,
     "objective": "binary",
@@ -49,41 +49,49 @@ if __name__ == '__main__':
     test_id, X_meta_te = build_data('test')
     val_losses = []
     predictions = []
-    skf = StratifiedKFold(n_splits=5, random_state=7610, shuffle=True)
-    for train_idx, val_idx in skf.split(X_meta_tr, y):
-        X_tr, y_tr = X_meta_tr[train_idx], y[train_idx]
-        X_val, y_val = X_meta_tr[val_idx], y[val_idx]
+    for i, seed in enumerate([42, 1024, 2023, 777, 13131]):
+        params.update({
+            "seed": seed,
+            "bagging_seed": seed,
+            "feature_fraction_seed": seed,
+            "data_random_seed": seed,
+        })
+        skf = StratifiedKFold(n_splits=5, random_state=7610, shuffle=True)
+        for train_idx, val_idx in skf.split(X_meta_tr, y):
+            X_tr, y_tr = X_meta_tr[train_idx], y[train_idx]
+            X_val, y_val = X_meta_tr[val_idx], y[val_idx]
+            
+            dtrain = lgb.Dataset(X_tr, label=y_tr)
+            dvalid = lgb.Dataset(X_val, label=y_val, reference=dtrain)
         
-        dtrain = lgb.Dataset(X_tr, label=y_tr)
-        dvalid = lgb.Dataset(X_val, label=y_val, reference=dtrain)
+            model_meta = lgb.train(
+                params,
+                dtrain,
+                num_boost_round=2000,
+                valid_sets=[dtrain, dvalid],
+                valid_names=["train", "valid"],
+                callbacks=[
+                    lgb.early_stopping(stopping_rounds=100),
+                    lgb.log_evaluation(period=50)
+                ],
+            )
+            
+            p_val = model_meta.predict(X_val, num_iteration=model_meta.best_iteration)
+            val_loss = log_loss(y_val, p_val)
+            val_losses.append(val_loss)
+            p_test = model_meta.predict(X_meta_te, num_iteration=model_meta.best_iteration)
+            predictions.append(p_test)
+        val_loss = np.mean(val_losses)
+        print(f'average validation loss: {val_loss: .5f}')
     
-        model_meta = lgb.train(
-            params,
-            dtrain,
-            num_boost_round=2000,
-            valid_sets=[dtrain, dvalid],
-            valid_names=["train", "valid"],
-            callbacks=[
-                lgb.early_stopping(stopping_rounds=50),
-                lgb.log_evaluation(period=50)
-            ],
-        )
-        
-        p_val = model_meta.predict(X_val, num_iteration=model_meta.best_iteration)
-        val_loss = log_loss(y_val, p_val)
-        val_losses.append(val_loss)
-        p_test = model_meta.predict(X_meta_te, num_iteration=model_meta.best_iteration)
-        predictions.append(p_test)
-    val_loss = np.mean(val_losses)
-    print(f'average validation loss: {val_loss: .5f}')
-    
-    test_id = pd.DataFrame(test_id).rename(columns={'id': 'test_id'}).astype(np.int32)
-    score = np.zeros([X_meta_te.shape[0]], dtype=np.float32)
-    for p in predictions:
-        score += p
-    score /= len(predictions)
-    score = pd.DataFrame(score, columns=['is_duplicate'])
-    submission = pd.concat([test_id, score], axis=1)
+        test_id = pd.DataFrame(test_id).rename(columns={'id': 'test_id'}).astype(np.int32)
+        score = np.zeros([X_meta_te.shape[0]], dtype=np.float32)
+        for p in predictions:
+            score += p
+        score /= len(predictions)
+        score = pd.DataFrame(score, columns=['is_duplicate'])
+        submission = pd.concat([test_id, score], axis=1)
+        submission.to_csv(f'artifacts/sub_{i}.csv', index=False)
     
     sample = pd.read_csv('data/sample_submission.csv')
     submission = sample[['test_id']].merge(submission, how='left', on=['test_id']).fillna(0)
